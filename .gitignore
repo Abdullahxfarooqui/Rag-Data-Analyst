@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files (large files)
+rag-app/data/uploads/*.csv
+rag-app/data/uploads/*.xlsx
+rag-app/data/uploads/*.xls
+rag-app/data/uploads/*.pdf
+rag-app/data/embeddings/
+rag-app/data/faiss_index/
+rag-app/data/chunks/
+
+# Keep directory structure
+!rag-app/data/uploads/.gitkeep
+!rag-app/data/embeddings/.gitkeep
+!rag-app/data/faiss_index/.gitkeep
+!rag-app/data/chunks/.gitkeep
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
