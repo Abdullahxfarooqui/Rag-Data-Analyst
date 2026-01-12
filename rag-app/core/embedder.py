@@ -2,8 +2,8 @@
 Production-grade embeddings using local sentence-transformers.
 No API calls needed - runs entirely locally for embeddings.
 
-Phase 6: Upgraded to BAAI/bge-base-en-v1.5 (768 dimensions) for better retrieval quality.
-         Auto-detects existing FAISS index dimensions for backward compatibility.
+Uses all-MiniLM-L6-v2 (384 dimensions) - lightweight model suitable for 
+Streamlit Cloud's memory constraints (~1GB RAM limit).
 """
 from typing import List, Dict, Any, Optional, Callable
 import time
@@ -12,15 +12,16 @@ from pathlib import Path
 import json
 import os
 
-# Configuration - can be overridden via environment variable
-DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"  # Phase 6: Upgraded from all-MiniLM-L6-v2
-FALLBACK_MODEL = "all-MiniLM-L6-v2"  # Fallback if BGE fails to load
+# Configuration - use lightweight model for Streamlit Cloud compatibility
+# all-MiniLM-L6-v2 is only ~90MB vs BGE's ~440MB
+DEFAULT_MODEL = "all-MiniLM-L6-v2"  # Lightweight, works on free tier
+FALLBACK_MODEL = "all-MiniLM-L6-v2"  # Same as default for stability
 LEGACY_MODEL = "all-MiniLM-L6-v2"  # For backward compatibility with existing indices
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_MODEL)
 
 # Use local sentence-transformers for embeddings (no API needed)
 _embedding_model = None
-EMBEDDING_DIMS = 384  # Start with legacy default, will be updated on load
+EMBEDDING_DIMS = 384  # all-MiniLM-L6-v2 uses 384 dimensions
 HAS_LOCAL_EMBEDDINGS = False
 ACTIVE_MODEL_NAME = None
 _INDEX_DIMS_DETECTED = None  # Store detected index dimensions
