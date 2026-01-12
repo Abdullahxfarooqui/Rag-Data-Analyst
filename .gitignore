@@ -40,6 +40,12 @@ rag-app/data/uploads/*.pdf
 rag-app/data/embeddings/
 rag-app/data/faiss_index/
 rag-app/data/chunks/
+rag-app/data/faiss_index.bin
+rag-app/data/chunks_metadata.json
+
+# Root data folder (legacy)
+data/faiss_index.bin
+data/chunks_metadata.json
 
 # Keep directory structure
 !rag-app/data/uploads/.gitkeep
