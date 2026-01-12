@@ -305,7 +305,7 @@ def render_time_series(df: pd.DataFrame, date_cols: List[str], prod_cols: List[s
             legend=dict(orientation="h", yanchor="bottom", y=1.02)
         )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Add summary stats below chart
     if selected_metrics:
@@ -365,11 +365,11 @@ def render_bar_charts(df: pd.DataFrame, cat_cols: List[str], prod_cols: List[str
             hover_data=['Average', 'Count']
         )
         fig.update_layout(height=500, xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Show data table
         with st.expander("📋 View Aggregated Data"):
-            st.dataframe(agg_data, use_container_width=True)
+            st.dataframe(agg_data, width='stretch')
 
 
 def render_pie_charts(df: pd.DataFrame, cat_cols: List[str], prod_cols: List[str], numeric_cols: List[str]):
@@ -396,7 +396,7 @@ def render_pie_charts(df: pd.DataFrame, cat_cols: List[str], prod_cols: List[str
                     hole=0.4
                 )
                 fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
     
     # Pie chart 2: Compare multiple metrics
     with col2:
@@ -418,7 +418,7 @@ def render_pie_charts(df: pd.DataFrame, cat_cols: List[str], prod_cols: List[str
                 hole=0.4
             )
             fig.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
 
 def render_histograms(df: pd.DataFrame, prod_cols: List[str], numeric_cols: List[str]):
@@ -468,7 +468,7 @@ def render_histograms(df: pd.DataFrame, prod_cols: List[str], numeric_cols: List
             showlegend=False
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Statistics
         st.markdown("**Distribution Statistics:**")
@@ -512,7 +512,7 @@ def render_heatmap(df: pd.DataFrame, numeric_cols: List[str]):
             title="Correlation Matrix"
         )
         fig.update_layout(height=600)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Find strongest correlations
         st.markdown("**Strongest Correlations:**")
@@ -528,7 +528,7 @@ def render_heatmap(df: pd.DataFrame, numeric_cols: List[str]):
         corr_df = pd.DataFrame(corr_pairs)
         corr_df['Abs Correlation'] = corr_df['Correlation'].abs()
         corr_df = corr_df.nlargest(5, 'Abs Correlation')[['Column 1', 'Column 2', 'Correlation']]
-        st.dataframe(corr_df, use_container_width=True)
+        st.dataframe(corr_df, width='stretch')
     else:
         st.info("Select at least 2 columns to show correlation heatmap.")
 
@@ -568,7 +568,7 @@ def render_data_table(df: pd.DataFrame, filename: str):
     if show_rows != "All":
         display_df = display_df.head(int(show_rows))
     
-    st.dataframe(display_df, use_container_width=True, height=400)
+    st.dataframe(display_df, width='stretch', height=400)
     
     # Export option - simplified
     st.markdown("**📥 Export Options:**")
@@ -578,7 +578,7 @@ def render_data_table(df: pd.DataFrame, filename: str):
         csv,
         f"{Path(filename).stem}_export.csv",
         "text/csv",
-        use_container_width=True
+        width='stretch'
     )
 
 
@@ -633,7 +633,7 @@ def render_quick_stats(df: pd.DataFrame):
                 })
         
         if stats_data:
-            st.dataframe(pd.DataFrame(stats_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(stats_data), width='stretch')
 
 
 def init_session():
@@ -950,7 +950,7 @@ def render_query():
         height=100
     )
     
-    if st.button("🔍 Analyze", type="primary", use_container_width=True):
+    if st.button("🔍 Analyze", type="primary", width='stretch'):
         if not user_query.strip():
             st.warning("Please enter a question")
             return
@@ -1151,7 +1151,7 @@ def render_query():
                             hovermode='x unified',
                             legend=dict(orientation="h", yanchor="bottom", y=1.02)
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     else:
                         st.info("No date column found for time series.")
                 
@@ -1190,7 +1190,7 @@ def render_query():
                             xaxis_tickangle=-45,
                             legend=dict(orientation="h", yanchor="bottom", y=1.02)
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     else:
                         st.info("No categorical columns found for bar chart.")
                 
@@ -1206,7 +1206,7 @@ def render_query():
                             hole=0.4
                         )
                         fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     elif len(prod_cols) == 1 and cat_cols:
                         cat_col = cat_cols[0]
                         agg_data = df.groupby(cat_col)[prod_cols[0]].sum().reset_index()
@@ -1217,7 +1217,7 @@ def render_query():
                             hole=0.4
                         )
                         fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     else:
                         st.info(f"Single metric: {prod_cols[0]} (Total: {df[prod_cols[0]].sum():,.0f})")
             else:
@@ -1253,7 +1253,7 @@ def render_quick_actions():
             label_visibility="collapsed"
         )
         
-        if st.button("📋 Generate Summary", use_container_width=True):
+        if st.button("📋 Generate Summary", width='stretch'):
             doc_hash = next(
                 (d.get("doc_hash") for d in docs if d.get("filename") == doc_for_summary),
                 None
@@ -1282,7 +1282,7 @@ def render_quick_actions():
             label_visibility="collapsed"
         )
         
-        if st.button("ℹ️ Get Document Info", use_container_width=True):
+        if st.button("ℹ️ Get Document Info", width='stretch'):
             doc_hash = next(
                 (d.get("doc_hash") for d in docs if d.get("filename") == doc_for_info),
                 None
@@ -1337,7 +1337,7 @@ def render_quick_actions():
                                 hole=0.4
                             )
                             fig.update_layout(height=350)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                     
                     with viz_col2:
                         # Bar chart - Top metrics
@@ -1351,7 +1351,7 @@ def render_quick_actions():
                                 labels={'x': 'Metric', 'y': 'Total Volume'}
                             )
                             fig.update_layout(height=350)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                     
                     # Time series if date column exists
                     date_cols = [c for c in df.columns if 'DATE' in c.upper() or 'TIME' in c.upper()]
@@ -1383,7 +1383,7 @@ def render_quick_actions():
                                 hovermode='x unified',
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02)
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                         except Exception as e:
                             pass  # Skip if date parsing fails
             
@@ -1412,7 +1412,7 @@ def render_quick_actions():
                     info["sample_data"],
                     columns=info.get("columns", [f"Col_{i}" for i in range(len(info["sample_data"][0]))])
                 )
-                st.dataframe(sample_df, use_container_width=True)
+                st.dataframe(sample_df, width='stretch')
         
         if st.button("Clear Result"):
             st.session_state.last_result = None
