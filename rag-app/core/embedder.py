@@ -4,181 +4,51 @@ No API calls needed - runs entirely locally for embeddings.
 
 Uses all-MiniLM-L6-v2 (384 dimensions) - lightweight model suitable for 
 Streamlit Cloud's memory constraints (~1GB RAM limit).
+
+SIMPLIFIED VERSION: No auto-detection, always uses 384d model.
 """
 from typing import List, Dict, Any, Optional, Callable
-import time
 import hashlib
-from pathlib import Path
-import json
-import os
 
-# Configuration - use lightweight model for Streamlit Cloud compatibility
-# all-MiniLM-L6-v2 is only ~90MB vs BGE's ~440MB
-DEFAULT_MODEL = "all-MiniLM-L6-v2"  # Lightweight, works on free tier
-FALLBACK_MODEL = "all-MiniLM-L6-v2"  # Same as default for stability
-LEGACY_MODEL = "all-MiniLM-L6-v2"  # For backward compatibility with existing indices
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_MODEL)
+# Configuration - fixed model for stability
+MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_DIMS = 384
 
-# Use local sentence-transformers for embeddings (no API needed)
+# Module-level state
 _embedding_model = None
-EMBEDDING_DIMS = 384  # all-MiniLM-L6-v2 uses 384 dimensions
-HAS_LOCAL_EMBEDDINGS = False
-ACTIVE_MODEL_NAME = None
-_INDEX_DIMS_DETECTED = None  # Store detected index dimensions
+_model_loaded = False
 
 
-def _detect_existing_index_dimensions() -> Optional[int]:
-    """
-    Detect dimensions of existing FAISS index for backward compatibility.
-    Returns None if no index exists.
-    """
-    global _INDEX_DIMS_DETECTED
+def _load_embedding_model():
+    """Lazy load the embedding model (only once)."""
+    global _embedding_model, _model_loaded
     
-    if _INDEX_DIMS_DETECTED is not None:
-        return _INDEX_DIMS_DETECTED
-    
-    # First, try to get dimensions from vector_store module if already loaded
-    try:
-        from core.vector_store import get_index_dimensions
-        dims = get_index_dimensions()
-        if dims is not None:
-            _INDEX_DIMS_DETECTED = dims
-            print(f"📐 Got dimensions from vector_store: {dims}")
-            return dims
-    except Exception:
-        pass
-    
-    # Use the SAME path as vector_store.py for consistency
-    _MODULE_DIR = Path(__file__).parent  # core/
-    _APP_DIR = _MODULE_DIR.parent  # rag-app/
-    PRIMARY_INDEX_PATH = _APP_DIR / "data" / "faiss_index.bin"
-    
-    # Check multiple possible index locations (primary first)
-    possible_paths = [
-        PRIMARY_INDEX_PATH,  # rag-app/data - SAME as vector_store.py
-        Path("data/faiss_index.bin"),  # workspace root/data
-        Path(__file__).parent / "data" / "faiss_index.bin",  # core/data
-        Path(__file__).parent.parent.parent / "data" / "faiss_index.bin",  # Demo AI/data
-    ]
-    
-    for index_path in possible_paths:
-        if index_path.exists():
-            try:
-                import faiss
-                index = faiss.read_index(str(index_path))
-                _INDEX_DIMS_DETECTED = index.d
-                print(f"📐 Detected existing FAISS index ({index_path}) with {_INDEX_DIMS_DETECTED} dimensions")
-                return _INDEX_DIMS_DETECTED
-            except Exception as e:
-                print(f"⚠️ Could not read index at {index_path}: {e}")
-    
-    print(f"⚠️ No existing FAISS index found. Checked: {[str(p) for p in possible_paths]}")
-    return None
-
-
-def _select_model_for_dimensions(target_dims: int) -> str:
-    """Select the appropriate model for target dimensions."""
-    if target_dims == 384:
-        return LEGACY_MODEL  # all-MiniLM-L6-v2
-    elif target_dims == 768:
-        return DEFAULT_MODEL  # BAAI/bge-base-en-v1.5
-    elif target_dims == 1024:
-        return "BAAI/bge-large-en-v1.5"
-    else:
-        # Unknown dimension, try default
-        return DEFAULT_MODEL
-
-
-def _load_embedding_model(force_dims: Optional[int] = None):
-    """
-    Lazy load the embedding model.
-    
-    If an existing FAISS index is detected, loads a compatible model.
-    Otherwise, loads the configured default model.
-    
-    Args:
-        force_dims: Force loading a model with specific dimensions
-    """
-    global _embedding_model, HAS_LOCAL_EMBEDDINGS, EMBEDDING_DIMS, ACTIVE_MODEL_NAME
-    
-    if _embedding_model is not None:
+    if _model_loaded:
         return
+    
+    _model_loaded = True  # Prevent re-entry
     
     try:
         from sentence_transformers import SentenceTransformer
-        
-        # Check for existing index dimensions (backward compatibility)
-        existing_dims = force_dims or _detect_existing_index_dimensions()
-        
-        if existing_dims is not None:
-            # Load model compatible with existing index
-            compatible_model = _select_model_for_dimensions(existing_dims)
-            print(f"🔄 Loading model compatible with existing {existing_dims}d index: {compatible_model}")
-            model_to_load = compatible_model
-        else:
-            # No existing index, use configured default
-            model_to_load = EMBEDDING_MODEL_NAME
-        
-        # Try loading the selected model
-        try:
-            _embedding_model = SentenceTransformer(model_to_load)
-            ACTIVE_MODEL_NAME = model_to_load
-            
-            # Get actual dimensions from loaded model
-            EMBEDDING_DIMS = _embedding_model.get_sentence_embedding_dimension()
-            
-            HAS_LOCAL_EMBEDDINGS = True
-            print(f"✅ Embedding model loaded: {model_to_load} ({EMBEDDING_DIMS}d)")
-            
-        except Exception as e:
-            print(f"⚠️ Failed to load {model_to_load}: {e}")
-            print(f"⚠️ Falling back to {FALLBACK_MODEL}")
-            
-            _embedding_model = SentenceTransformer(FALLBACK_MODEL)
-            ACTIVE_MODEL_NAME = FALLBACK_MODEL
-            EMBEDDING_DIMS = 384
-            HAS_LOCAL_EMBEDDINGS = True
-            print(f"✅ Fallback model loaded: {FALLBACK_MODEL} ({EMBEDDING_DIMS}d)")
-            
+        print(f"🔄 Loading embedding model: {MODEL_NAME}...")
+        _embedding_model = SentenceTransformer(MODEL_NAME)
+        print(f"✅ Embedding model loaded: {MODEL_NAME} ({EMBEDDING_DIMS}d)")
     except ImportError:
-        HAS_LOCAL_EMBEDDINGS = False
-        EMBEDDING_DIMS = 384  # Default to legacy dimensions
-        _embedding_model = None
         print("⚠️ sentence-transformers not installed. Install with: pip install sentence-transformers")
+        _embedding_model = None
+    except Exception as e:
+        print(f"⚠️ Failed to load embedding model: {e}")
+        _embedding_model = None
 
 
 def get_model_info() -> Dict[str, Any]:
     """Get information about the current embedding model."""
     _load_embedding_model()
     return {
-        "model_name": ACTIVE_MODEL_NAME,
+        "model_name": MODEL_NAME,
         "dimensions": EMBEDDING_DIMS,
-        "is_loaded": HAS_LOCAL_EMBEDDINGS,
-        "configured_model": EMBEDDING_MODEL_NAME,
-        "fallback_model": FALLBACK_MODEL,
-        "detected_index_dims": _INDEX_DIMS_DETECTED,
-        "is_legacy_mode": ACTIVE_MODEL_NAME == LEGACY_MODEL
+        "is_loaded": _embedding_model is not None,
     }
-
-
-def reset_to_new_model():
-    """
-    Reset embedder to use the new model (BGE).
-    Call this when rebuilding the index from scratch.
-    
-    Returns:
-        Dict with new model info
-    """
-    global _embedding_model, _INDEX_DIMS_DETECTED
-    
-    # Clear cached state
-    _embedding_model = None
-    _INDEX_DIMS_DETECTED = None  # Ignore existing index
-    
-    # Force load with new model dimensions (768 for BGE)
-    _load_embedding_model(force_dims=768)
-    
-    return get_model_info()
 
 
 def truncate_text(text: str, max_chars: int = 8000) -> str:
@@ -188,40 +58,24 @@ def truncate_text(text: str, max_chars: int = 8000) -> str:
     return text[:max_chars]
 
 
-def _prepare_text_for_bge(text: str, is_query: bool = False) -> str:
-    """
-    Prepare text for BGE model embedding.
-    
-    BGE models work better with instruction prefixes for queries.
-    """
-    text = truncate_text(text)
-    
-    # BGE query prefix for better retrieval
-    if is_query and ACTIVE_MODEL_NAME and "bge" in ACTIVE_MODEL_NAME.lower():
-        return f"Represent this sentence for searching relevant passages: {text}"
-    
-    return text
-
-
-def embed_batch_local(texts: List[str], is_query: bool = False) -> List[List[float]]:
+def embed_batch_local(texts: List[str]) -> List[List[float]]:
     """
     Embed a batch of texts using local model.
     
     Args:
         texts: List of texts to embed
-        is_query: Whether these are query texts (adds BGE prefix)
         
     Returns:
         List of embedding vectors
     """
     _load_embedding_model()
     
-    if not HAS_LOCAL_EMBEDDINGS or _embedding_model is None:
+    if _embedding_model is None:
         print("⚠️ Local embeddings not available, returning zero vectors")
         return [[0.0] * EMBEDDING_DIMS for _ in texts]
     
-    # Prepare texts (with BGE prefix for queries)
-    prepared_texts = [_prepare_text_for_bge(t, is_query) for t in texts]
+    # Truncate long texts
+    prepared_texts = [truncate_text(t) for t in texts]
     
     try:
         embeddings = _embedding_model.encode(
@@ -248,7 +102,7 @@ def embed_texts_sequential(
         texts: List of texts to embed
         batch_size: Number of texts per batch
         progress_callback: Optional callback(completed, total)
-        is_query: Whether these are query texts
+        is_query: Ignored (kept for compatibility)
         
     Returns:
         List of embedding vectors in order
@@ -264,11 +118,10 @@ def embed_texts_sequential(
         batch = texts[i:i + batch_size]
         
         try:
-            embeddings = embed_batch_local(batch, is_query=is_query)
+            embeddings = embed_batch_local(batch)
             all_embeddings.extend(embeddings)
         except Exception as e:
             print(f"Batch {i} failed: {e}")
-            # Return zero vectors for failed batch
             all_embeddings.extend([[0.0] * EMBEDDING_DIMS for _ in batch])
         
         if progress_callback:
@@ -289,12 +142,11 @@ def embed_query(query: str) -> List[float]:
     """
     _load_embedding_model()
     
-    if not HAS_LOCAL_EMBEDDINGS or _embedding_model is None:
+    if _embedding_model is None:
         print("⚠️ Local embeddings not available for query")
         return [0.0] * EMBEDDING_DIMS
     
-    # Use BGE query prefix
-    prepared_query = _prepare_text_for_bge(query, is_query=True)
+    prepared_query = truncate_text(query)
     
     try:
         embedding = _embedding_model.encode(
@@ -323,7 +175,7 @@ def embed_chunks(
         List of embedding vectors
     """
     texts = [chunk.get("text", "") for chunk in chunks]
-    return embed_texts_sequential(texts, batch_size=32, progress_callback=progress_callback, is_query=False)
+    return embed_texts_sequential(texts, batch_size=32, progress_callback=progress_callback)
 
 
 def compute_doc_hash(file_content: bytes) -> str:
@@ -333,5 +185,4 @@ def compute_doc_hash(file_content: bytes) -> str:
 
 def get_embedding_dimensions() -> int:
     """Get the current embedding dimensions."""
-    _load_embedding_model()
     return EMBEDDING_DIMS
