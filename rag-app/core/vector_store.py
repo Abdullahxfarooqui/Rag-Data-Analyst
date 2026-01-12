@@ -195,6 +195,22 @@ class VectorStore:
         query = np.array([query_embedding], dtype=np.float32)
         query = self._normalize(query)
         
+        # DIMENSION SAFETY CHECK - handle mismatch gracefully
+        query_dim = query.shape[1]
+        index_dim = self.index.d
+        
+        if query_dim != index_dim:
+            print(f"⚠️ Dimension mismatch: query={query_dim}, index={index_dim}")
+            # Try to resize query to match index (truncate or pad with zeros)
+            if query_dim > index_dim:
+                query = query[:, :index_dim]
+                print(f"✂️ Truncated query embedding from {query_dim} to {index_dim} dimensions")
+            else:
+                padding = np.zeros((1, index_dim - query_dim), dtype=np.float32)
+                query = np.concatenate([query, padding], axis=1)
+                query = self._normalize(query)  # Re-normalize after padding
+                print(f"📐 Padded query embedding from {query_dim} to {index_dim} dimensions")
+        
         # Search more if filtering by document
         search_k = min(k * 5 if doc_hash else k * 2, self.index.ntotal)
         
@@ -381,6 +397,14 @@ def get_vector_store() -> VectorStore:
     if _store is None:
         _store = VectorStore()
     return _store
+
+
+def get_index_dimensions() -> Optional[int]:
+    """Get dimensions of the current FAISS index, if loaded."""
+    store = get_vector_store()
+    if store.index is not None:
+        return store.index.d
+    return None
 
 
 def reset_vector_store() -> None:

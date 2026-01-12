@@ -36,11 +36,27 @@ def _detect_existing_index_dimensions() -> Optional[int]:
     if _INDEX_DIMS_DETECTED is not None:
         return _INDEX_DIMS_DETECTED
     
-    # Check multiple possible index locations
+    # First, try to get dimensions from vector_store module if already loaded
+    try:
+        from core.vector_store import get_index_dimensions
+        dims = get_index_dimensions()
+        if dims is not None:
+            _INDEX_DIMS_DETECTED = dims
+            print(f"📐 Got dimensions from vector_store: {dims}")
+            return dims
+    except Exception:
+        pass
+    
+    # Use the SAME path as vector_store.py for consistency
+    _MODULE_DIR = Path(__file__).parent  # core/
+    _APP_DIR = _MODULE_DIR.parent  # rag-app/
+    PRIMARY_INDEX_PATH = _APP_DIR / "data" / "faiss_index.bin"
+    
+    # Check multiple possible index locations (primary first)
     possible_paths = [
+        PRIMARY_INDEX_PATH,  # rag-app/data - SAME as vector_store.py
         Path("data/faiss_index.bin"),  # workspace root/data
         Path(__file__).parent / "data" / "faiss_index.bin",  # core/data
-        Path(__file__).parent.parent / "data" / "faiss_index.bin",  # rag-app/data
         Path(__file__).parent.parent.parent / "data" / "faiss_index.bin",  # Demo AI/data
     ]
     
@@ -55,6 +71,7 @@ def _detect_existing_index_dimensions() -> Optional[int]:
             except Exception as e:
                 print(f"⚠️ Could not read index at {index_path}: {e}")
     
+    print(f"⚠️ No existing FAISS index found. Checked: {[str(p) for p in possible_paths]}")
     return None
 
 
