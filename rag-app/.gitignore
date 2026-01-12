@@ -16,11 +16,13 @@ venv/
 ENV/
 env/
 
-# Data files (large files, user uploads)
+# Data files (large files, user uploads, indices)
 data/uploads/
 data/chunks/
 data/embeddings/
 data/faiss_index/
+data/faiss_index.bin
+data/chunks_metadata.json
 *.xlsx
 *.xls
 *.csv
