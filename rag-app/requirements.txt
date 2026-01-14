@@ -1,8 +1,8 @@
 # Streamlit UI
 streamlit>=1.28.0
 
-# PDF extraction (pdfplumber only - pure Python)
-pdfplumber>=0.10.0
+# PDF extraction - DISABLED temporarily to debug segfault
+# pdfplumber>=0.10.0
 
 # Excel extraction
 pandas>=2.0.0

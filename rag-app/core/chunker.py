@@ -16,13 +16,9 @@ import re
 import hashlib
 import json
 
-# Try to import tiktoken for accurate token counting
-try:
-    import tiktoken
-    TOKENIZER = tiktoken.get_encoding("cl100k_base")
-except ImportError:
-    TOKENIZER = None
-    print("Warning: tiktoken not installed. Using approximate token counting.")
+# Token counting disabled - tiktoken has Rust native code causing segfaults
+# Using character approximation instead (4 chars ≈ 1 token)
+TOKENIZER = None
 
 
 # ============================================================================

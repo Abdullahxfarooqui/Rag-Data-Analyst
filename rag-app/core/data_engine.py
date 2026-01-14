@@ -23,13 +23,8 @@ from dataclasses import dataclass, field
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# Try to import pdfplumber (primary) and camelot (fallback)
-try:
-    import pdfplumber
-    HAS_PDFPLUMBER = True
-except ImportError:
-    HAS_PDFPLUMBER = False
-    print("Warning: pdfplumber not installed. Install with: pip install pdfplumber")
+# pdfplumber disabled - causes segfaults on Streamlit Cloud via dependencies
+HAS_PDFPLUMBER = False
 
 # PyMuPDF removed - causes segfaults on Streamlit Cloud
 HAS_PYMUPDF = False

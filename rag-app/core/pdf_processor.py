@@ -1,14 +1,73 @@
 """
-Production-grade PDF processor for large files (15-50MB+).
-Uses pdfplumber only - no PyMuPDF (causes segfaults on Streamlit Cloud).
+PDF processor DISABLED - pdfplumber dependencies cause segfaults.
+Focus on Excel/CSV for now.
 """
-import pdfplumber
 from pathlib import Path
-from typing import Dict, List, Any, Union, Generator, Optional, Callable
-import io
+from typing import Dict, List, Any, Optional, Callable
 import re
-import gc
 from dataclasses import dataclass, field
+
+
+@dataclass
+class ExtractedTable:
+    """Represents an extracted table from PDF."""
+    page_number: int
+    table_index: int
+    headers: List[str]
+    rows: List[List[Any]]
+    num_rows: int
+    num_cols: int
+    markdown: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "page_number": self.page_number,
+            "table_index": self.table_index,
+            "headers": self.headers,
+            "rows": self.rows[:100],
+            "num_rows": self.num_rows,
+            "num_cols": self.num_cols,
+            "markdown": self.markdown
+        }
+
+
+@dataclass
+class ExtractedPage:
+    """Represents an extracted page from PDF."""
+    page_number: int
+    text: str
+    tables: List[ExtractedTable] = field(default_factory=list)
+    has_tables: bool = False
+    char_count: int = 0
+
+
+def extract_pdf_complete(
+    file_content: bytes,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> Dict[str, Any]:
+    """PDF extraction disabled - causes segfaults. Use Excel/CSV instead."""
+    return {
+        "text": "PDF extraction temporarily disabled. Please upload Excel or CSV files.",
+        "pages": [],
+        "tables": [],
+        "type": "pdf",
+        "num_pages": 0,
+        "num_tables": 0,
+        "total_table_rows": 0,
+        "is_dataset": False,
+        "total_chars": 0,
+        "error": "PDF extraction disabled to prevent segfaults on Streamlit Cloud"
+    }
+
+
+def get_page_count(file_content: bytes) -> int:
+    """PDF disabled."""
+    return 0
+
+
+def clean_text(text: str) -> str:
+    """Clean text."""
+    return text.strip()
 
 
 @dataclass
