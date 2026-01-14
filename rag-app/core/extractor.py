@@ -170,32 +170,47 @@ def _extract_excel(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Any]:
     """
-    Excel extraction DISABLED due to openpyxl/xlrd segfaults.
-    Users should convert Excel to CSV and upload that instead.
+    Extract content from Excel with full data preservation.
+    
+    IMPORTANT: Only .xls format supported (not .xlsx) to avoid segfaults.
+    If you have .xlsx, save as .xls or CSV first.
     """
-    return {
-        "text": "⚠️ **Excel file upload is temporarily disabled**\n\n"
-                "**Reason:** Excel processing libraries (openpyxl/xlrd) cause crashes on Streamlit Cloud.\n\n"
-                "**Solution:** Please convert your Excel file to CSV format:\n"
-                "1. Open your Excel file\n"
-                "2. File → Save As\n"
-                "3. Choose 'CSV (Comma delimited)' format\n"
-                "4. Upload the CSV file here instead\n\n"
-                "CSV files work perfectly and contain all your data!",
-        "tables": [],
-        "dataframes": [],
-        "statistics": None,
-        "type": "excel",
-        "filename": filename,
-        "is_dataset": False,
-        "metadata": {
-            "sheets": [],
-            "total_rows": 0,
-            "total_cols": 0,
-            "extraction_method": "disabled"
-        },
-        "error": "Excel extraction disabled to prevent server crashes. Please use CSV format instead."
-    }
+    # Check file format
+    if filename.lower().endswith('.xlsx'):
+        return {
+            "text": "⚠️ **.xlsx files are not supported** (they cause crashes)\n\n"
+                    "**Please convert to .xls format:**\n"
+                    "1. Open your file in Excel\n"
+                    "2. File → Save As\n"
+                    "3. Choose 'Excel 97-2003 Workbook (.xls)'\n"
+                    "4. Upload the .xls file\n\n"
+                    "**Or save as CSV** for best compatibility.",
+            "tables": [],
+            "dataframes": [],
+            "statistics": None,
+            "type": "excel",
+            "filename": filename,
+            "is_dataset": False,
+            "metadata": {"sheets": [], "total_rows": 0, "total_cols": 0},
+            "error": ".xlsx format not supported. Use .xls or CSV instead."
+        }
+    
+    try:
+        # Use data_engine for structured extraction (.xls only)
+        tables = extract_tables_from_excel(file_content, progress_callback)
+        
+        if not tables:
+            return {
+                "text": "⚠️ No data found in Excel file. Please check the file and try again.",
+                "tables": [],
+                "dataframes": [],
+                "statistics": None,
+                "type": "excel",
+                "filename": filename,
+                "is_dataset": False,
+                "metadata": {"sheets": [], "total_rows": 0, "total_cols": 0},
+                "error": "No tables extracted from Excel file."
+            }
         
         # Build result
         all_tables_data = []

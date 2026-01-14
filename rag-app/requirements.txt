@@ -4,8 +4,8 @@ streamlit>=1.28.0
 # Data handling
 pandas>=2.0.0
 
-# CSV parsing (pandas dependency, but ensuring it's explicit)
-# Note: Removed openpyxl and xlrd - they have native extensions causing segfaults on Streamlit Cloud
+# Excel reading - using older pure-Python version to avoid C extension segfaults
+xlrd==1.2.0  # Last pure-Python version before C extensions were added
 
 # Visualizations
 plotly>=5.18.0

@@ -798,14 +798,14 @@ def render_sidebar():
 def render_upload():
     """Render file upload section."""
     st.markdown("### 📤 Upload Documents")
-    st.warning("⚠️ **Excel upload temporarily disabled** - Please convert Excel files to CSV format first. CSV files work perfectly!")
-    st.caption("Supports CSV files • Large files up to 200MB supported")
+    st.info("📊 **Excel support:** .xls files only (Excel 97-2003 format). For .xlsx files, save as .xls or CSV first.")
+    st.caption("Supports .xls Excel and CSV files • Large files up to 200MB supported")
     
     uploaded_files = st.file_uploader(
         "Choose files",
-        type=["csv"],  # Only CSV for now to avoid segfaults
+        type=["xls", "csv"],  # .xls (old Excel format) works with pure Python xlrd
         accept_multiple_files=True,
-        help="Tables extracted with Python (pandas) • All rows preserved • Statistics computed automatically"
+        help="Excel files must be .xls format (Excel 97-2003) • Tables extracted with Python (xlrd/pandas) • All rows preserved"
     )
     
     if uploaded_files:
@@ -828,8 +828,12 @@ def render_upload():
                 if uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(io.BytesIO(file_bytes))
                     st.session_state.dataframes[uploaded_file.name] = df
+                elif uploaded_file.name.endswith('.xls'):
+                    # Use xlrd engine for .xls files (pure Python, safe)
+                    df = pd.read_excel(io.BytesIO(file_bytes), engine='xlrd')
+                    st.session_state.dataframes[uploaded_file.name] = df
                 else:
-                    st.warning(f"⚠️ File type not supported: {uploaded_file.name}. Please upload CSV files only.")
+                    st.warning(f"⚠️ File type not supported: {uploaded_file.name}. Please upload .xls or CSV files only.")
                     continue
             except Exception as e:
                 st.warning(f"Could not cache dataframe for visualizations: {e}")
