@@ -1,66 +1,50 @@
 """
-Production-grade embeddings using local sentence-transformers.
-No API calls needed - runs entirely locally for embeddings.
+Production-grade embeddings using OpenAI API.
+Lightweight - no PyTorch/CUDA dependencies.
 
-Uses all-MiniLM-L6-v2 (384 dimensions) - lightweight model suitable for 
-Streamlit Cloud's memory constraints (~1GB RAM limit).
-
-SIMPLIFIED VERSION: No auto-detection, always uses 384d model.
+Uses text-embedding-3-small (1536 dimensions) - fast and affordable.
 """
-from typing import List, Dict, Any, Optional, Callable
+import os
 import hashlib
+import requests
+from typing import List, Dict, Any, Optional, Callable
 
-# Configuration - fixed model for stability
-MODEL_NAME = "all-MiniLM-L6-v2"
-EMBEDDING_DIMS = 384
-
-# Module-level state
-_embedding_model = None
-_model_loaded = False
+# Configuration
+MODEL_NAME = "text-embedding-3-small"
+EMBEDDING_DIMS = 1536
+OPENAI_API_URL = "https://api.openai.com/v1/embeddings"
 
 
-def _load_embedding_model():
-    """Lazy load the embedding model (only once)."""
-    global _embedding_model, _model_loaded
-    
-    if _model_loaded:
-        return
-    
-    _model_loaded = True  # Prevent re-entry
-    
+def _get_api_key() -> str:
+    """Get OpenAI API key from Streamlit secrets or environment."""
     try:
-        from sentence_transformers import SentenceTransformer
-        print(f"🔄 Loading embedding model: {MODEL_NAME}...")
-        _embedding_model = SentenceTransformer(MODEL_NAME)
-        print(f"✅ Embedding model loaded: {MODEL_NAME} ({EMBEDDING_DIMS}d)")
-    except ImportError:
-        print("⚠️ sentence-transformers not installed. Install with: pip install sentence-transformers")
-        _embedding_model = None
-    except Exception as e:
-        print(f"⚠️ Failed to load embedding model: {e}")
-        _embedding_model = None
+        import streamlit as st
+        if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("OPENAI_API_KEY", "")
 
 
 def get_model_info() -> Dict[str, Any]:
     """Get information about the current embedding model."""
-    _load_embedding_model()
     return {
         "model_name": MODEL_NAME,
         "dimensions": EMBEDDING_DIMS,
-        "is_loaded": _embedding_model is not None,
+        "is_loaded": bool(_get_api_key()),
     }
 
 
 def truncate_text(text: str, max_chars: int = 8000) -> str:
-    """Truncate text to avoid memory issues."""
+    """Truncate text to avoid token limits."""
     if len(text) <= max_chars:
         return text
     return text[:max_chars]
 
 
-def embed_batch_local(texts: List[str]) -> List[List[float]]:
+def embed_batch_openai(texts: List[str]) -> List[List[float]]:
     """
-    Embed a batch of texts using local model.
+    Embed a batch of texts using OpenAI API.
     
     Args:
         texts: List of texts to embed
@@ -68,35 +52,47 @@ def embed_batch_local(texts: List[str]) -> List[List[float]]:
     Returns:
         List of embedding vectors
     """
-    _load_embedding_model()
+    api_key = _get_api_key()
     
-    if _embedding_model is None:
-        print("⚠️ Local embeddings not available, returning zero vectors")
+    if not api_key:
+        print("⚠️ OpenAI API key not configured, returning zero vectors")
         return [[0.0] * EMBEDDING_DIMS for _ in texts]
     
-    # Truncate long texts
-    prepared_texts = [truncate_text(t) for t in texts]
+    # Truncate and clean texts
+    prepared_texts = [truncate_text(t.replace("\n", " ")) for t in texts]
     
     try:
-        embeddings = _embedding_model.encode(
-            prepared_texts, 
-            convert_to_numpy=True,
-            normalize_embeddings=True  # L2 normalize for cosine similarity
+        response = requests.post(
+            OPENAI_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": MODEL_NAME,
+                "input": prepared_texts
+            },
+            timeout=60
         )
-        return [emb.tolist() for emb in embeddings]
+        response.raise_for_status()
+        
+        data = response.json()
+        embeddings = [item["embedding"] for item in data["data"]]
+        return embeddings
+        
     except Exception as e:
-        print(f"Local embedding error: {e}")
+        print(f"OpenAI embedding error: {e}")
         return [[0.0] * EMBEDDING_DIMS for _ in texts]
 
 
 def embed_texts_sequential(
     texts: List[str],
-    batch_size: int = 32,
+    batch_size: int = 100,  # OpenAI can handle larger batches
     progress_callback: Optional[Callable[[int, int], None]] = None,
     is_query: bool = False
 ) -> List[List[float]]:
     """
-    Embed texts sequentially with batching using local model.
+    Embed texts sequentially with batching using OpenAI API.
     
     Args:
         texts: List of texts to embed
@@ -110,7 +106,6 @@ def embed_texts_sequential(
     if not texts:
         return []
     
-    _load_embedding_model()
     all_embeddings = []
     total = len(texts)
     
@@ -118,7 +113,7 @@ def embed_texts_sequential(
         batch = texts[i:i + batch_size]
         
         try:
-            embeddings = embed_batch_local(batch)
+            embeddings = embed_batch_openai(batch)
             all_embeddings.extend(embeddings)
         except Exception as e:
             print(f"Batch {i} failed: {e}")
@@ -132,7 +127,7 @@ def embed_texts_sequential(
 
 def embed_query(query: str) -> List[float]:
     """
-    Generate embedding for a single query using local model.
+    Generate embedding for a single query using OpenAI API.
     
     Args:
         query: Query text to embed
@@ -140,21 +135,11 @@ def embed_query(query: str) -> List[float]:
     Returns:
         Embedding vector
     """
-    _load_embedding_model()
-    
-    if _embedding_model is None:
-        print("⚠️ Local embeddings not available for query")
-        return [0.0] * EMBEDDING_DIMS
-    
-    prepared_query = truncate_text(query)
+    prepared_query = truncate_text(query.replace("\n", " "))
     
     try:
-        embedding = _embedding_model.encode(
-            [prepared_query], 
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        )
-        return embedding[0].tolist()
+        embeddings = embed_batch_openai([prepared_query])
+        return embeddings[0]
     except Exception as e:
         print(f"Query embedding error: {e}")
         return [0.0] * EMBEDDING_DIMS
@@ -165,7 +150,7 @@ def embed_chunks(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> List[List[float]]:
     """
-    Generate embeddings for document chunks using local model.
+    Generate embeddings for document chunks using OpenAI API.
     
     Args:
         chunks: List of chunk dictionaries with 'text' key
@@ -175,7 +160,7 @@ def embed_chunks(
         List of embedding vectors
     """
     texts = [chunk.get("text", "") for chunk in chunks]
-    return embed_texts_sequential(texts, batch_size=32, progress_callback=progress_callback)
+    return embed_texts_sequential(texts, batch_size=100, progress_callback=progress_callback)
 
 
 def compute_doc_hash(file_content: bytes) -> str:

@@ -9,8 +9,8 @@ from pathlib import Path
 import json
 import os
 
-# Default embedding dimension (will be updated from loaded index or embedder)
-DEFAULT_EMBEDDING_DIMS = 384
+# Default embedding dimension (OpenAI text-embedding-3-small = 1536)
+DEFAULT_EMBEDDING_DIMS = 1536
 
 # Storage paths - use absolute path relative to this file's location
 # This ensures consistency regardless of working directory
