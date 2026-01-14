@@ -394,13 +394,12 @@ def _statistics_to_dict(stats: DataStatistics) -> Dict[str, Any]:
 
 
 def _get_pdf_page_count(file_content: bytes) -> int:
-    """Get PDF page count."""
+    """Get PDF page count using pdfplumber."""
     try:
-        import fitz
-        doc = fitz.open(stream=file_content, filetype="pdf")
-        count = len(doc)
-        doc.close()
-        return count
+        import pdfplumber
+        import io
+        with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+            return len(pdf.pages)
     except:
         return 0
 

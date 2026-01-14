@@ -31,11 +31,8 @@ except ImportError:
     HAS_PDFPLUMBER = False
     print("Warning: pdfplumber not installed. Install with: pip install pdfplumber")
 
-try:
-    import fitz  # PyMuPDF
-    HAS_PYMUPDF = True
-except ImportError:
-    HAS_PYMUPDF = False
+# PyMuPDF removed - causes segfaults on Streamlit Cloud
+HAS_PYMUPDF = False
 
 
 # ============================================================================
@@ -176,10 +173,6 @@ def extract_tables_from_pdf(
                 ))
                 table_index += 1
     
-    # Try PyMuPDF fallback if no tables found
-    if not tables and HAS_PYMUPDF:
-        tables = _extract_tables_pymupdf(pdf_path_or_bytes, progress_callback, max_pages)
-    
     return tables
 
 
@@ -221,58 +214,7 @@ def _raw_table_to_dataframe(raw_table: List[List]) -> pd.DataFrame:
     return df
 
 
-def _extract_tables_pymupdf(
-    pdf_bytes: bytes,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-    max_pages: Optional[int] = None
-) -> List[ExtractedTable]:
-    """Fallback table extraction using PyMuPDF."""
-    if not HAS_PYMUPDF:
-        return []
-    
-    tables = []
-    table_index = 0
-    
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    total_pages = len(doc)
-    pages_to_process = total_pages if max_pages is None else min(max_pages, total_pages)
-    
-    for page_num in range(pages_to_process):
-        if progress_callback:
-            progress_callback(page_num + 1, total_pages)
-        
-        page = doc[page_num]
-        
-        try:
-            page_tables = page.find_tables()
-            
-            for tab in page_tables:
-                raw_table = tab.extract()
-                if not raw_table or len(raw_table) < 2:
-                    continue
-                
-                df = _raw_table_to_dataframe(raw_table)
-                
-                if df.empty:
-                    continue
-                
-                tables.append(ExtractedTable(
-                    df=df,
-                    source=f"Page {page_num + 1}",
-                    table_index=table_index,
-                    num_rows=len(df),
-                    num_cols=len(df.columns),
-                    headers=list(df.columns),
-                    dtypes={col: str(df[col].dtype) for col in df.columns},
-                    is_complete=True,
-                    extraction_method="pymupdf"
-                ))
-                table_index += 1
-        except Exception as e:
-            print(f"PyMuPDF table extraction error on page {page_num}: {e}")
-    
-    doc.close()
-    return tables
+# PyMuPDF fallback removed - causes segfaults on Streamlit Cloud
 
 
 # ============================================================================

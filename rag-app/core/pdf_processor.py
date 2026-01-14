@@ -1,8 +1,7 @@
 """
 Production-grade PDF processor for large files (15-50MB+).
-Uses streaming, page-wise processing, and memory-efficient extraction.
+Uses pdfplumber only - no PyMuPDF (causes segfaults on Streamlit Cloud).
 """
-import fitz  # PyMuPDF
 import pdfplumber
 from pathlib import Path
 from typing import Dict, List, Any, Union, Generator, Optional, Callable
@@ -10,8 +9,6 @@ import io
 import re
 import gc
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
 
 
 @dataclass
@@ -174,80 +171,20 @@ def extract_tables_from_page_pdfplumber(page, page_num: int) -> List[ExtractedTa
     return tables
 
 
-def extract_tables_from_page_pymupdf(page, page_num: int) -> List[ExtractedTable]:
-    """Extract tables using PyMuPDF's find_tables."""
-    tables = []
-    
-    try:
-        tabs = page.find_tables()
-        
-        for idx, tab in enumerate(tabs):
-            table_data = tab.extract()
-            
-            if not table_data or len(table_data) < 2:
-                continue
-            
-            headers = [clean_cell(h) for h in table_data[0]]
-            rows = [[clean_cell(cell) for cell in row] for row in table_data[1:]]
-            
-            # Skip mostly empty tables
-            non_empty_cells = sum(1 for row in rows for cell in row if cell and cell != "NULL")
-            total_cells = sum(len(row) for row in rows)
-            
-            if total_cells > 0 and non_empty_cells / total_cells < 0.3:
-                continue
-            
-            markdown = table_to_markdown(headers, rows)
-            
-            tables.append(ExtractedTable(
-                page_number=page_num,
-                table_index=idx,
-                headers=headers,
-                rows=rows,
-                num_rows=len(rows),
-                num_cols=len(headers),
-                markdown=markdown
-            ))
-    except Exception as e:
-        print(f"PyMuPDF table extraction error on page {page_num}: {e}")
-    
-    return tables
-
-
-def process_page_streaming(
-    pdf_bytes: bytes,
-    page_num: int,
-    use_pdfplumber: bool = True
-) -> ExtractedPage:
-    """
-    Process a single page - designed for parallel/streaming execution.
-    Opens PDF fresh for each page to avoid memory issues with large files.
-    """
+def process_page(page, page_num: int) -> ExtractedPage:
+    """Process a single page using pdfplumber."""
     text = ""
     tables = []
     
-    # Extract with PyMuPDF (faster for text)
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        if page_num < len(doc):
-            page = doc[page_num]
-            text = clean_text(page.get_text("text"))
-            tables = extract_tables_from_page_pymupdf(page, page_num + 1)
-        doc.close()
+        # Extract text
+        raw_text = page.extract_text() or ""
+        text = clean_text(raw_text)
+        
+        # Extract tables
+        tables = extract_tables_from_page_pdfplumber(page, page_num + 1)
     except Exception as e:
-        print(f"PyMuPDF error on page {page_num}: {e}")
-    
-    # Try pdfplumber for better table extraction if PyMuPDF found none
-    if use_pdfplumber and len(tables) == 0:
-        try:
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                if page_num < len(pdf.pages):
-                    plumber_page = pdf.pages[page_num]
-                    plumber_tables = extract_tables_from_page_pdfplumber(plumber_page, page_num + 1)
-                    if plumber_tables:
-                        tables = plumber_tables
-        except Exception as e:
-            print(f"pdfplumber error on page {page_num}: {e}")
+        print(f"Error processing page {page_num}: {e}")
     
     return ExtractedPage(
         page_number=page_num + 1,
@@ -260,64 +197,31 @@ def process_page_streaming(
 
 def stream_pdf_pages(
     file_content: bytes,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-    max_workers: int = 4
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Generator[ExtractedPage, None, None]:
     """
-    Stream PDF pages using parallel processing.
-    Memory-efficient: processes pages in batches.
+    Stream PDF pages one at a time.
+    Memory-efficient for large files.
     
     Args:
         file_content: PDF file bytes
         progress_callback: Optional callback(current_page, total_pages)
-        max_workers: Number of parallel workers
         
     Yields:
         ExtractedPage objects one at a time
     """
-    # Get page count first
-    doc = fitz.open(stream=file_content, filetype="pdf")
-    total_pages = len(doc)
-    doc.close()
-    
-    # Process in batches to control memory
-    batch_size = max_workers * 2
-    
-    for batch_start in range(0, total_pages, batch_size):
-        batch_end = min(batch_start + batch_size, total_pages)
-        batch_pages = list(range(batch_start, batch_end))
+    with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+        total_pages = len(pdf.pages)
         
-        # Process batch in parallel
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(process_page_streaming, file_content, page_num): page_num
-                for page_num in batch_pages
-            }
+        for page_num, page in enumerate(pdf.pages):
+            if progress_callback:
+                progress_callback(page_num + 1, total_pages)
             
-            # Collect results in order
-            results = {}
-            for future in as_completed(futures):
-                page_num = futures[future]
-                try:
-                    results[page_num] = future.result()
-                except Exception as e:
-                    print(f"Error processing page {page_num}: {e}")
-                    results[page_num] = ExtractedPage(
-                        page_number=page_num + 1,
-                        text="",
-                        tables=[],
-                        has_tables=False,
-                        char_count=0
-                    )
+            yield process_page(page, page_num)
             
-            # Yield in order
-            for page_num in batch_pages:
-                if progress_callback:
-                    progress_callback(page_num + 1, total_pages)
-                yield results[page_num]
-        
-        # Force garbage collection between batches
-        gc.collect()
+            # Force garbage collection periodically
+            if page_num % 10 == 0:
+                gc.collect()
 
 
 def extract_pdf_complete(
@@ -325,7 +229,7 @@ def extract_pdf_complete(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Any]:
     """
-    Complete PDF extraction with streaming and parallel processing.
+    Complete PDF extraction.
     Handles large files (15-50MB+) efficiently.
     
     Returns:
@@ -370,8 +274,6 @@ def extract_pdf_complete(
 
 
 def get_page_count(file_content: bytes) -> int:
-    """Get total page count without loading entire PDF."""
-    doc = fitz.open(stream=file_content, filetype="pdf")
-    count = len(doc)
-    doc.close()
-    return count
+    """Get total page count."""
+    with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+        return len(pdf.pages)
