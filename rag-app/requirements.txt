@@ -1,15 +1,16 @@
 # Streamlit UI
 streamlit>=1.28.0
 
-# Excel extraction
+# Data handling
 pandas>=2.0.0
-openpyxl>=3.1.0
-xlrd>=2.0.0
+
+# CSV parsing (pandas dependency, but ensuring it's explicit)
+# Note: Removed openpyxl and xlrd - they have native extensions causing segfaults on Streamlit Cloud
 
 # Visualizations
 plotly>=5.18.0
 
-# HTTP requests (for API calls - replacing openai package to avoid tiktoken dependency)
+# HTTP requests (for API calls)
 requests>=2.31.0
 
 # NumPy for vector operations

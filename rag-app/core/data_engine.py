@@ -221,82 +221,20 @@ def extract_tables_from_excel(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> List[ExtractedTable]:
     """
-    Extract ALL tables from Excel file with full data preservation.
-    
-    Handles:
-    - Multiple sheets
-    - Large files (reads in optimized mode)
-    - All data types
-    - NO deduplication - all rows preserved
+    Excel extraction DISABLED - openpyxl/xlrd cause segfaults on Streamlit Cloud.
     
     Args:
         excel_path_or_bytes: Path to Excel file or bytes content
         progress_callback: Optional callback(current_sheet, total_sheets)
         
     Returns:
-        List of ExtractedTable objects containing DataFrames
+        Empty list with error message
     """
-    tables = []
-    table_index = 0
+    print("⚠️ Excel extraction disabled - openpyxl/xlrd cause segfaults on Streamlit Cloud")
+    print("Please convert your Excel file to CSV format and upload that instead.")
     
-    # Handle bytes input
-    if isinstance(excel_path_or_bytes, bytes):
-        excel_file = io.BytesIO(excel_path_or_bytes)
-    else:
-        excel_file = excel_path_or_bytes
-    
-    # Get sheet names first
-    xlsx = pd.ExcelFile(excel_file)
-    sheet_names = xlsx.sheet_names
-    
-    for sheet_idx, sheet_name in enumerate(sheet_names):
-        if progress_callback:
-            progress_callback(sheet_idx + 1, len(sheet_names))
-        
-        try:
-            # Read entire sheet - NO row limit, preserve ALL data
-            df = pd.read_excel(
-                xlsx, 
-                sheet_name=sheet_name,
-                dtype=str,  # Read as string first to preserve all values
-                na_values=['', 'NA', 'N/A', 'null', 'NULL', 'None'],
-                keep_default_na=True
-            )
-            
-            if df.empty:
-                continue
-            
-            # Drop completely empty rows and columns
-            df = df.dropna(how='all', axis=0)
-            df = df.dropna(how='all', axis=1)
-            
-            if df.empty:
-                continue
-            
-            # Clean headers
-            df.columns = [_clean_header(str(c)) for c in df.columns]
-            
-            # Infer proper types
-            df = _infer_column_types(df)
-            
-            tables.append(ExtractedTable(
-                df=df,
-                source=sheet_name,
-                table_index=table_index,
-                num_rows=len(df),
-                num_cols=len(df.columns),
-                headers=list(df.columns),
-                dtypes={col: str(df[col].dtype) for col in df.columns},
-                is_complete=True,
-                extraction_method="pandas"
-            ))
-            table_index += 1
-            
-        except Exception as e:
-            print(f"Error reading sheet {sheet_name}: {e}")
-    
-    xlsx.close()
-    return tables
+    # Return empty list - caller will handle the error
+    return []
 
 
 def extract_tables_from_csv(

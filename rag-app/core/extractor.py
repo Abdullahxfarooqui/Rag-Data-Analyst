@@ -170,13 +170,32 @@ def _extract_excel(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Any]:
     """
-    Extract content from Excel with full data preservation.
-    Handles multiple sheets and large files.
-    ALL rows preserved - no deduplication.
+    Excel extraction DISABLED due to openpyxl/xlrd segfaults.
+    Users should convert Excel to CSV and upload that instead.
     """
-    try:
-        # Use data_engine for structured extraction
-        tables = extract_tables_from_excel(file_content, progress_callback)
+    return {
+        "text": "⚠️ **Excel file upload is temporarily disabled**\n\n"
+                "**Reason:** Excel processing libraries (openpyxl/xlrd) cause crashes on Streamlit Cloud.\n\n"
+                "**Solution:** Please convert your Excel file to CSV format:\n"
+                "1. Open your Excel file\n"
+                "2. File → Save As\n"
+                "3. Choose 'CSV (Comma delimited)' format\n"
+                "4. Upload the CSV file here instead\n\n"
+                "CSV files work perfectly and contain all your data!",
+        "tables": [],
+        "dataframes": [],
+        "statistics": None,
+        "type": "excel",
+        "filename": filename,
+        "is_dataset": False,
+        "metadata": {
+            "sheets": [],
+            "total_rows": 0,
+            "total_cols": 0,
+            "extraction_method": "disabled"
+        },
+        "error": "Excel extraction disabled to prevent server crashes. Please use CSV format instead."
+    }
         
         # Build result
         all_tables_data = []

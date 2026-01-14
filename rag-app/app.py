@@ -798,13 +798,14 @@ def render_sidebar():
 def render_upload():
     """Render file upload section."""
     st.markdown("### 📤 Upload Documents")
-    st.caption("Supports PDF, Excel (xlsx/xls), and CSV files • Large files up to 200MB supported")
+    st.warning("⚠️ **Excel upload temporarily disabled** - Please convert Excel files to CSV format first. CSV files work perfectly!")
+    st.caption("Supports CSV files • Large files up to 200MB supported")
     
     uploaded_files = st.file_uploader(
         "Choose files",
-        type=["pdf", "xlsx", "xls", "csv"],
+        type=["csv"],  # Only CSV for now to avoid segfaults
         accept_multiple_files=True,
-        help="Tables extracted with Python (pdfplumber/pandas) • All rows preserved • Statistics computed automatically"
+        help="Tables extracted with Python (pandas) • All rows preserved • Statistics computed automatically"
     )
     
     if uploaded_files:
@@ -826,13 +827,10 @@ def render_upload():
                 import io
                 if uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(io.BytesIO(file_bytes))
-                elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-                    df = pd.read_excel(io.BytesIO(file_bytes))
-                else:
-                    df = None
-                
-                if df is not None:
                     st.session_state.dataframes[uploaded_file.name] = df
+                else:
+                    st.warning(f"⚠️ File type not supported: {uploaded_file.name}. Please upload CSV files only.")
+                    continue
             except Exception as e:
                 st.warning(f"Could not cache dataframe for visualizations: {e}")
             
