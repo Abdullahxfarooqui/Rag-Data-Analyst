@@ -1,10 +1,8 @@
 """
-LLM Client supporting both local Ollama and OpenRouter API.
+LLM Client for OpenRouter API.
 
 Features:
-- Auto-detects local vs cloud deployment
-- Local Ollama support (when running locally)
-- OpenRouter for cloud deployment (Streamlit Cloud)
+- Uses OpenRouter with free NVIDIA model
 - Streaming support
 - Configurable parameters
 - Error handling with retries
@@ -16,38 +14,17 @@ from typing import Optional, List, Dict, Any, Generator, Callable
 from dataclasses import dataclass, field
 
 
-def _is_running_on_streamlit_cloud() -> bool:
-    """Detect if running on Streamlit Cloud vs locally."""
-    # Streamlit Cloud sets specific environment variables
-    return (
-        os.environ.get("STREAMLIT_SHARING_MODE") is not None or
-        os.environ.get("STREAMLIT_SERVER_ADDRESS") is not None or
-        os.environ.get("HOME", "").startswith("/home/appuser") or
-        os.path.exists("/home/appuser")
-    )
-
-
 @dataclass
 class LLMConfig:
     """Configuration for the LLM client."""
-    # Local Ollama settings
-    model: str = "llama3.2:3b"
-    base_url: str = "http://localhost:11434/api/chat"
-    # Auto-detect: use OpenRouter on cloud, Ollama locally
-    use_local: bool = None  # None = auto-detect
-    # OpenRouter settings (used on Streamlit Cloud)
-    openrouter_model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
-    openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    # OpenRouter settings
+    model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
+    base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     max_tokens: int = 2000
     temperature: float = 0.1
-    timeout: int = 120  # Increased for cloud
-    referer: str = "http://localhost:8503"
+    timeout: int = 120
+    referer: str = "https://rag-data-analyst.streamlit.app"
     app_title: str = "RAG Data Analyst"
-    
-    def __post_init__(self):
-        """Auto-detect deployment environment if use_local is None."""
-        if self.use_local is None:
-            self.use_local = not _is_running_on_streamlit_cloud()
 
 
 @dataclass
@@ -70,11 +47,9 @@ class LLMResponse:
 
 class LLMClient:
     """
-    LLM client supporting both local Ollama and OpenRouter.
+    OpenRouter LLM client with free NVIDIA model.
     
     Features:
-    - Local Ollama support (default, no API key needed)
-    - OpenRouter fallback for cloud models
     - Synchronous and streaming calls
     - Configurable via LLMConfig
     - Thread-safe
@@ -122,10 +97,6 @@ class LLMClient:
             "X-Title": self.config.app_title
         }
     
-    def _build_ollama_headers(self) -> Dict[str, str]:
-        """Build request headers for local Ollama."""
-        return {"Content-Type": "application/json"}
-    
     def _build_payload(
         self,
         messages: List[Dict[str, str]],
@@ -134,26 +105,13 @@ class LLMClient:
         stream: bool = False
     ) -> Dict[str, Any]:
         """Build request payload."""
-        if self.config.use_local:
-            # Ollama format
-            return {
-                "model": self.config.model,
-                "messages": messages,
-                "stream": stream,
-                "options": {
-                    "num_predict": max_tokens or self.config.max_tokens,
-                    "temperature": temperature if temperature is not None else self.config.temperature
-                }
-            }
-        else:
-            # OpenRouter format
-            return {
-                "model": self.config.openrouter_model,
-                "messages": messages,
-                "max_tokens": max_tokens or self.config.max_tokens,
-                "temperature": temperature if temperature is not None else self.config.temperature,
-                "stream": stream
-            }
+        return {
+            "model": self.config.model,
+            "messages": messages,
+            "max_tokens": max_tokens or self.config.max_tokens,
+            "temperature": temperature if temperature is not None else self.config.temperature,
+            "stream": stream
+        }
     
     def call(
         self,
@@ -172,82 +130,16 @@ class LLMClient:
         Returns:
             LLMResponse with content or error
         """
-        if self.config.use_local:
-            return self._call_ollama(messages, max_tokens, temperature)
-        else:
-            return self._call_openrouter(messages, max_tokens, temperature)
-    
-    def _call_ollama(
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None
-    ) -> LLMResponse:
-        """Make a call to local Ollama."""
-        try:
-            response = requests.post(
-                self.config.base_url,
-                headers=self._build_ollama_headers(),
-                json=self._build_payload(messages, max_tokens, temperature),
-                timeout=self.config.timeout
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            return LLMResponse(
-                content=data.get("message", {}).get("content", ""),
-                model=data.get("model", self.config.model),
-                usage={
-                    "prompt_tokens": data.get("prompt_eval_count", 0),
-                    "completion_tokens": data.get("eval_count", 0),
-                    "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
-                },
-                finish_reason="stop" if data.get("done") else None
-            )
-            
-        except requests.exceptions.ConnectionError:
-            return LLMResponse(
-                content="",
-                model=self.config.model,
-                error="Cannot connect to Ollama. Make sure Ollama is running (run 'ollama serve')."
-            )
-        except requests.exceptions.Timeout:
-            return LLMResponse(
-                content="",
-                model=self.config.model,
-                error="Request timed out. Try a more specific query."
-            )
-        except requests.exceptions.RequestException as e:
-            return LLMResponse(
-                content="",
-                model=self.config.model,
-                error=f"Ollama API error: {str(e)}"
-            )
-        except Exception as e:
-            return LLMResponse(
-                content="",
-                model=self.config.model,
-                error=f"Unexpected error: {str(e)}"
-            )
-    
-    def _call_openrouter(
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None
-    ) -> LLMResponse:
-        """Make a call to OpenRouter API."""
         if not self.api_key:
             return LLMResponse(
                 content="",
-                model=self.config.openrouter_model,
-                error="No API key configured. Please set OPENROUTER_API_KEY."
+                model=self.config.model,
+                error="No API key configured. Please set OPENROUTER_API_KEY in Streamlit secrets."
             )
         
         try:
             response = requests.post(
-                self.config.openrouter_url,
+                self.config.base_url,
                 headers=self._build_headers(),
                 json=self._build_payload(messages, max_tokens, temperature),
                 timeout=self.config.timeout
@@ -259,7 +151,7 @@ class LLMClient:
             
             return LLMResponse(
                 content=choice.get("message", {}).get("content", ""),
-                model=data.get("model", self.config.openrouter_model),
+                model=data.get("model", self.config.model),
                 usage=data.get("usage", {}),
                 finish_reason=choice.get("finish_reason")
             )
@@ -267,19 +159,27 @@ class LLMClient:
         except requests.exceptions.Timeout:
             return LLMResponse(
                 content="",
-                model=self.config.openrouter_model,
+                model=self.config.model,
                 error="Request timed out. Try a more specific query."
             )
         except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            # Try to get more details from response
+            try:
+                if hasattr(e, 'response') and e.response is not None:
+                    error_detail = e.response.json()
+                    error_msg = f"{error_msg} - {error_detail}"
+            except:
+                pass
             return LLMResponse(
                 content="",
-                model=self.config.openrouter_model,
-                error=f"API error: {str(e)}"
+                model=self.config.model,
+                error=f"Error communicating with LLM: {error_msg}"
             )
         except Exception as e:
             return LLMResponse(
                 content="",
-                model=self.config.openrouter_model,
+                model=self.config.model,
                 error=f"Unexpected error: {str(e)}"
             )
     
@@ -305,77 +205,11 @@ class LLMClient:
         Returns:
             Final LLMResponse (access via .send(None) after iteration)
         """
-        if self.config.use_local:
-            yield from self._stream_ollama(messages, max_tokens, temperature, on_token)
-        else:
-            yield from self._stream_openrouter(messages, max_tokens, temperature, on_token)
-    
-    def _stream_ollama(
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        on_token: Optional[Callable[[str], None]] = None
-    ) -> Generator[str, None, LLMResponse]:
-        """Stream from local Ollama."""
-        full_content = []
-        
-        try:
-            response = requests.post(
-                self.config.base_url,
-                headers=self._build_ollama_headers(),
-                json=self._build_payload(messages, max_tokens, temperature, stream=True),
-                timeout=self.config.timeout,
-                stream=True
-            )
-            response.raise_for_status()
-            
-            for line in response.iter_lines():
-                if not line:
-                    continue
-                
-                try:
-                    data = json.loads(line.decode('utf-8'))
-                    content = data.get("message", {}).get("content", "")
-                    
-                    if content:
-                        full_content.append(content)
-                        if on_token:
-                            on_token(content)
-                        yield content
-                    
-                    if data.get("done"):
-                        break
-                        
-                except json.JSONDecodeError:
-                    continue
-            
-            return LLMResponse(
-                content="".join(full_content),
-                model=self.config.model,
-                finish_reason="stop"
-            )
-            
-        except Exception as e:
-            return LLMResponse(
-                content="".join(full_content),
-                model=self.config.model,
-                error=str(e)
-            )
-    
-    def _stream_openrouter(
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        on_token: Optional[Callable[[str], None]] = None
-    ) -> Generator[str, None, LLMResponse]:
-        """Stream from OpenRouter API."""
         if not self.api_key:
             yield ""
             return LLMResponse(
                 content="",
-                model=self.config.openrouter_model,
+                model=self.config.model,
                 error="No API key configured."
             )
         
@@ -383,7 +217,7 @@ class LLMClient:
         
         try:
             response = requests.post(
-                self.config.openrouter_url,
+                self.config.base_url,
                 headers=self._build_headers(),
                 json=self._build_payload(messages, max_tokens, temperature, stream=True),
                 timeout=self.config.timeout,
@@ -419,14 +253,14 @@ class LLMClient:
             
             return LLMResponse(
                 content="".join(full_content),
-                model=self.config.openrouter_model,
+                model=self.config.model,
                 finish_reason="stop"
             )
             
         except Exception as e:
             return LLMResponse(
                 content="".join(full_content),
-                model=self.config.openrouter_model,
+                model=self.config.model,
                 error=str(e)
             )
     
