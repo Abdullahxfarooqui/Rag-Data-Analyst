@@ -1,9 +1,6 @@
 # Streamlit UI
 streamlit>=1.28.0
 
-# PDF extraction - DISABLED temporarily to debug segfault
-# pdfplumber>=0.10.0
-
 # Excel extraction
 pandas>=2.0.0
 openpyxl>=3.1.0
@@ -12,10 +9,7 @@ xlrd>=2.0.0
 # Visualizations
 plotly>=5.18.0
 
-# OpenAI API (for embeddings)
-openai>=1.0.0
-
-# HTTP requests (for OpenRouter API)
+# HTTP requests (for API calls - replacing openai package to avoid tiktoken dependency)
 requests>=2.31.0
 
 # NumPy for vector operations
