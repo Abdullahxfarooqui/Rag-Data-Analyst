@@ -1,11 +1,12 @@
 # Streamlit UI
 streamlit>=1.28.0
 
-# Data handling
+# Data handling (CSV only - NO pandas for Excel to avoid segfaults)
 pandas>=2.0.0
 
-# Excel reading - using older pure-Python version to avoid C extension segfaults
-xlrd==1.2.0  # Last pure-Python version before C extensions were added
+# Excel reading - PURE PYTHON ONLY (no C extensions)
+openpyxl>=3.1.0  # For .xlsx files (pure Python)
+xlrd==1.2.0  # For .xls files (last pure Python version)
 
 # Visualizations
 plotly>=5.18.0
@@ -13,5 +14,5 @@ plotly>=5.18.0
 # HTTP requests (for API calls)
 requests>=2.31.0
 
-# NumPy for vector operations
+# NumPy for vector operations (NOT used in Excel extraction)
 numpy>=1.24.0

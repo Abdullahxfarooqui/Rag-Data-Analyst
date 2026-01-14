@@ -170,101 +170,67 @@ def _extract_excel(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Any]:
     """
-    Extract content from Excel with full data preservation.
-    
-    IMPORTANT: Only .xls format supported (not .xlsx) to avoid segfaults.
-    If you have .xlsx, save as .xls or CSV first.
+    Extract content from Excel using PURE PYTHON (no pandas, no segfaults).
+    Supports both .xlsx and .xls files.
     """
-    # Check file format
-    if filename.lower().endswith('.xlsx'):
-        return {
-            "text": "⚠️ **.xlsx files are not supported** (they cause crashes)\n\n"
-                    "**Please convert to .xls format:**\n"
-                    "1. Open your file in Excel\n"
-                    "2. File → Save As\n"
-                    "3. Choose 'Excel 97-2003 Workbook (.xls)'\n"
-                    "4. Upload the .xls file\n\n"
-                    "**Or save as CSV** for best compatibility.",
-            "tables": [],
-            "dataframes": [],
-            "statistics": None,
-            "type": "excel",
-            "filename": filename,
-            "is_dataset": False,
-            "metadata": {"sheets": [], "total_rows": 0, "total_cols": 0},
-            "error": ".xlsx format not supported. Use .xls or CSV instead."
-        }
+    from core.excel_extractor import extract_excel_pure, get_excel_metadata
     
     try:
-        # Use data_engine for structured extraction (.xls only)
-        tables = extract_tables_from_excel(file_content, progress_callback)
+        # Get metadata first
+        metadata = get_excel_metadata(file_content, filename)
         
-        if not tables:
+        if "error" in metadata:
             return {
-                "text": "⚠️ No data found in Excel file. Please check the file and try again.",
+                "text": f"⚠️ Error reading Excel file: {metadata['error']}",
                 "tables": [],
                 "dataframes": [],
                 "statistics": None,
                 "type": "excel",
                 "filename": filename,
                 "is_dataset": False,
-                "metadata": {"sheets": [], "total_rows": 0, "total_cols": 0},
-                "error": "No tables extracted from Excel file."
+                "metadata": metadata,
+                "error": metadata["error"]
             }
         
-        # Build result
-        all_tables_data = []
-        all_dataframes = []
-        full_text_parts = []
-        total_rows = 0
+        # Extract text using pure Python
+        text = extract_excel_pure(file_content, filename)
         
-        for table in tables:
-            df = table.df
-            all_dataframes.append(df)
-            total_rows += len(df)
-            
-            # Create markdown representation
-            markdown = _dataframe_to_markdown(df)
-            
-            table_data = {
-                "sheet_name": table.source,
-                "table_index": table.table_index,
-                "headers": table.headers,
-                "num_rows": table.num_rows,
-                "num_cols": table.num_cols,
-                "dtypes": table.dtypes,
-                "markdown": markdown,
-                "rows": df.head(100).values.tolist()
+        if text.startswith("Error:"):
+            return {
+                "text": text,
+                "tables": [],
+                "dataframes": [],
+                "statistics": None,
+                "type": "excel",
+                "filename": filename,
+                "is_dataset": False,
+                "metadata": metadata,
+                "error": text
             }
-            all_tables_data.append(table_data)
-            full_text_parts.append(f"## Sheet: {table.source}\n\n{markdown}")
         
-        full_text = "\n\n---\n\n".join(full_text_parts)
-        
-        # Compute statistics
-        if all_dataframes:
-            merged_df = merge_tables(tables)
-            stats = compute_statistics(merged_df)
-            stats_dict = _statistics_to_dict(stats)
-        else:
-            stats_dict = {}
+        # Build basic table info from metadata
+        tables = []
+        for sheet in metadata.get("sheets", []):
+            tables.append({
+                "sheet_name": sheet["name"],
+                "num_rows": sheet["rows"],
+                "extraction_method": "pure_python"
+            })
         
         return {
-            "text": full_text,
-            "tables": all_tables_data,
-            "dataframes": all_dataframes,
-            "statistics": stats_dict,
+            "text": text,
+            "tables": tables,
+            "dataframes": [],  # No pandas DataFrames to avoid segfaults
+            "statistics": None,  # Statistics require pandas, skip for safety
             "type": "excel",
             "filename": filename,
-            "num_sheets": len(tables),
-            "num_tables": len(tables),
-            "total_table_rows": total_rows,
+            "num_sheets": len(metadata.get("sheets", [])),
             "is_dataset": True,
-            "total_chars": len(full_text)
+            "metadata": metadata,
+            "total_chars": len(text)
         }
         
     except Exception as e:
-        print(f"Excel extraction error: {e}")
         return {
             "text": f"Error extracting Excel: {str(e)}",
             "tables": [],

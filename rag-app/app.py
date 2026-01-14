@@ -798,14 +798,14 @@ def render_sidebar():
 def render_upload():
     """Render file upload section."""
     st.markdown("### 📤 Upload Documents")
-    st.info("📊 **Excel support:** .xls files only (Excel 97-2003 format). For .xlsx files, save as .xls or CSV first.")
-    st.caption("Supports .xls Excel and CSV files • Large files up to 200MB supported")
+    st.info("📊 **Excel support:** Both .xlsx and .xls files supported (pure Python, no crashes)")
+    st.caption("Supports Excel (.xlsx, .xls) and CSV files • Large files up to 200MB")
     
     uploaded_files = st.file_uploader(
         "Choose files",
-        type=["xls", "csv"],  # .xls (old Excel format) works with pure Python xlrd
+        type=["xlsx", "xls", "csv"],
         accept_multiple_files=True,
-        help="Excel files must be .xls format (Excel 97-2003) • Tables extracted with Python (xlrd/pandas) • All rows preserved"
+        help="All Excel formats supported • Extracted using pure Python (no segfaults) • All data preserved"
     )
     
     if uploaded_files:
@@ -822,21 +822,15 @@ def render_upload():
             with open(saved_path, 'wb') as f:
                 f.write(file_bytes)
             
-            # Cache the dataframe for visualizations
+            # Cache dataframe for visualizations (CSV only - Excel uses pure Python text extraction)
             try:
                 import io
                 if uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(io.BytesIO(file_bytes))
                     st.session_state.dataframes[uploaded_file.name] = df
-                elif uploaded_file.name.endswith('.xls'):
-                    # Use xlrd engine for .xls files (pure Python, safe)
-                    df = pd.read_excel(io.BytesIO(file_bytes), engine='xlrd')
-                    st.session_state.dataframes[uploaded_file.name] = df
-                else:
-                    st.warning(f"⚠️ File type not supported: {uploaded_file.name}. Please upload .xls or CSV files only.")
-                    continue
+                # Excel files are processed as text only (no pandas) to avoid segfaults
             except Exception as e:
-                st.warning(f"Could not cache dataframe for visualizations: {e}")
+                st.warning(f"Could not cache dataframe: {e}")
             
             # Progress placeholder
             progress_area = st.empty()
