@@ -1,23 +1,20 @@
 """
-Production FAISS vector store with intelligent retrieval.
-Optimized for large documents with smart context merging.
+Pure NumPy vector store with intelligent retrieval.
+No FAISS dependency - works on any platform including Streamlit Cloud.
 """
-import faiss
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import json
-import os
 
 # Default embedding dimension (OpenAI text-embedding-3-small = 1536)
 DEFAULT_EMBEDDING_DIMS = 1536
 
 # Storage paths - use absolute path relative to this file's location
-# This ensures consistency regardless of working directory
 _MODULE_DIR = Path(__file__).parent  # core/
 _APP_DIR = _MODULE_DIR.parent  # rag-app/
 DATA_DIR = _APP_DIR / "data"
-FAISS_INDEX_PATH = DATA_DIR / "faiss_index.bin"
+VECTORS_PATH = DATA_DIR / "vectors.npy"
 METADATA_PATH = DATA_DIR / "chunks_metadata.json"
 
 
@@ -37,29 +34,24 @@ def get_embedding_dims() -> int:
 
 class VectorStore:
     """
-    FAISS-based vector store optimized for RAG.
-    Features:
-    - Cosine similarity with normalized vectors
-    - Smart context retrieval with adjacent chunks
-    - Per-document search capability
-    - Deduplication via chunk hashes
+    Pure NumPy vector store for RAG.
+    Uses cosine similarity for search - no FAISS required.
     """
     
     def __init__(self, dimension: int = None):
         """Initialize vector store."""
-        # Don't set dimension yet - will get from loaded index or embedder
         self._requested_dimension = dimension
-        self.index: Optional[faiss.IndexFlatIP] = None
+        self.vectors: Optional[np.ndarray] = None  # Shape: (n, dimension)
         self.chunks: List[Dict[str, Any]] = []
         self._chunk_hashes: set = set()
-        self._doc_chunks_cache: Dict[str, List[int]] = {}  # doc_hash -> list of indices
+        self._doc_chunks_cache: Dict[str, List[int]] = {}
         
         ensure_data_dir()
         self._load()
         
-        # Set dimension: from loaded index > requested > embedder
-        if self.index is not None:
-            self.dimension = self.index.d
+        # Set dimension
+        if self.vectors is not None and len(self.vectors) > 0:
+            self.dimension = self.vectors.shape[1]
         elif self._requested_dimension is not None:
             self.dimension = self._requested_dimension
         else:
@@ -67,29 +59,28 @@ class VectorStore:
     
     def _load(self) -> bool:
         """Load existing index from disk."""
-        if FAISS_INDEX_PATH.exists() and METADATA_PATH.exists():
+        if VECTORS_PATH.exists() and METADATA_PATH.exists():
             try:
-                self.index = faiss.read_index(str(FAISS_INDEX_PATH))
+                self.vectors = np.load(str(VECTORS_PATH))
                 with open(METADATA_PATH, 'r', encoding='utf-8') as f:
                     self.chunks = json.load(f)
                 
-                # Build lookup structures
                 self._chunk_hashes = set(c.get("hash", "") for c in self.chunks if c.get("hash"))
                 self._rebuild_doc_cache()
                 return True
             except Exception as e:
                 print(f"Error loading index: {e}")
-                self.index = None
+                self.vectors = None
                 self.chunks = []
         return False
     
     def _save(self) -> None:
         """Save index to disk."""
-        if self.index is None:
+        if self.vectors is None:
             return
         
         ensure_data_dir()
-        faiss.write_index(self.index, str(FAISS_INDEX_PATH))
+        np.save(str(VECTORS_PATH), self.vectors)
         with open(METADATA_PATH, 'w', encoding='utf-8') as f:
             json.dump(self.chunks, f)
     
@@ -115,17 +106,7 @@ class VectorStore:
         embeddings: List[List[float]],
         doc_hash: str
     ) -> int:
-        """
-        Add chunks with their embeddings.
-        
-        Args:
-            chunks: List of chunk dictionaries
-            embeddings: List of embedding vectors
-            doc_hash: Document hash for grouping
-            
-        Returns:
-            Number of chunks added
-        """
+        """Add chunks with their embeddings."""
         if not chunks or not embeddings or len(chunks) != len(embeddings):
             return 0
         
@@ -138,7 +119,6 @@ class VectorStore:
             if chunk_hash and chunk_hash in self._chunk_hashes:
                 continue
             
-            # Add doc_hash to chunk
             chunk["doc_hash"] = doc_hash
             new_chunks.append(chunk)
             new_embeddings.append(emb)
@@ -149,16 +129,18 @@ class VectorStore:
         if not new_chunks:
             return 0
         
-        # Convert to numpy
-        vectors = np.array(new_embeddings, dtype=np.float32)
-        vectors = self._normalize(vectors)
+        # Convert to numpy and normalize
+        new_vectors = np.array(new_embeddings, dtype=np.float32)
+        new_vectors = self._normalize(new_vectors)
         
-        # Initialize or extend index
-        if self.index is None:
-            self.index = faiss.IndexFlatIP(self.dimension)
-        
+        # Initialize or extend vectors
         start_idx = len(self.chunks)
-        self.index.add(vectors)
+        
+        if self.vectors is None:
+            self.vectors = new_vectors
+        else:
+            self.vectors = np.vstack([self.vectors, new_vectors])
+        
         self.chunks.extend(new_chunks)
         
         # Update doc cache
@@ -171,66 +153,70 @@ class VectorStore:
         self._save()
         return len(new_chunks)
     
+    @property
+    def index(self):
+        """Compatibility property - returns self if vectors exist."""
+        return self if self.vectors is not None and len(self.vectors) > 0 else None
+    
+    @property
+    def ntotal(self) -> int:
+        """Total number of vectors (FAISS compatibility)."""
+        return len(self.vectors) if self.vectors is not None else 0
+    
+    @property
+    def d(self) -> int:
+        """Dimension of vectors (FAISS compatibility)."""
+        return self.dimension
+    
     def search(
         self,
         query_embedding: List[float],
         k: int = 10,
         doc_hash: Optional[str] = None
     ) -> List[Tuple[Dict[str, Any], float]]:
-        """
-        Search for similar chunks.
-        
-        Args:
-            query_embedding: Query vector
-            k: Number of results
-            doc_hash: Optional - filter to specific document
-            
-        Returns:
-            List of (chunk, score) tuples
-        """
-        if self.index is None or self.index.ntotal == 0:
+        """Search for similar chunks using cosine similarity."""
+        if self.vectors is None or len(self.vectors) == 0:
             return []
         
         # Normalize query
         query = np.array([query_embedding], dtype=np.float32)
         query = self._normalize(query)
         
-        # DIMENSION SAFETY CHECK - handle mismatch gracefully
+        # Handle dimension mismatch
         query_dim = query.shape[1]
-        index_dim = self.index.d
+        index_dim = self.vectors.shape[1]
         
         if query_dim != index_dim:
             print(f"⚠️ Dimension mismatch: query={query_dim}, index={index_dim}")
-            # Try to resize query to match index (truncate or pad with zeros)
             if query_dim > index_dim:
                 query = query[:, :index_dim]
-                print(f"✂️ Truncated query embedding from {query_dim} to {index_dim} dimensions")
             else:
                 padding = np.zeros((1, index_dim - query_dim), dtype=np.float32)
                 query = np.concatenate([query, padding], axis=1)
-                query = self._normalize(query)  # Re-normalize after padding
-                print(f"📐 Padded query embedding from {query_dim} to {index_dim} dimensions")
+                query = self._normalize(query)
         
-        # Search more if filtering by document
-        search_k = min(k * 5 if doc_hash else k * 2, self.index.ntotal)
+        # Compute cosine similarity (dot product of normalized vectors)
+        scores = np.dot(self.vectors, query.T).flatten()
         
-        scores, indices = self.index.search(query, search_k)
+        # Get top-k indices
+        if doc_hash:
+            # Filter by document
+            valid_indices = self._doc_chunks_cache.get(doc_hash, [])
+            if not valid_indices:
+                return []
+            
+            doc_scores = [(idx, scores[idx]) for idx in valid_indices]
+            doc_scores.sort(key=lambda x: x[1], reverse=True)
+            top_indices = [idx for idx, _ in doc_scores[:k]]
+            top_scores = [score for _, score in doc_scores[:k]]
+        else:
+            top_indices = np.argsort(scores)[::-1][:k]
+            top_scores = scores[top_indices]
         
         results = []
-        for i, idx in enumerate(indices[0]):
-            if idx < 0 or idx >= len(self.chunks):
-                continue
-            
-            chunk = self.chunks[idx]
-            
-            # Filter by document if specified
-            if doc_hash and chunk.get("doc_hash") != doc_hash:
-                continue
-            
-            results.append((chunk, float(scores[0][i])))
-            
-            if len(results) >= k:
-                break
+        for idx, score in zip(top_indices, top_scores):
+            if idx < len(self.chunks):
+                results.append((self.chunks[idx], float(score)))
         
         return results
     
@@ -241,11 +227,7 @@ class VectorStore:
         context_window: int = 2,
         doc_hash: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Search and include adjacent chunks for context.
-        
-        Returns merged results with surrounding context included.
-        """
+        """Search and include adjacent chunks for context."""
         base_results = self.search(query_embedding, k=k, doc_hash=doc_hash)
         
         if not base_results:
@@ -270,7 +252,6 @@ class VectorStore:
             doc_chunks = [(self.chunks[i], i) for i in doc_indices]
             doc_chunks.sort(key=lambda x: x[0].get("chunk_id", 0))
             
-            # Create mapping from chunk_id to position
             id_to_pos = {c[0].get("chunk_id"): pos for pos, c in enumerate(doc_chunks)}
             
             for chunk_id, score in matches:
@@ -278,17 +259,12 @@ class VectorStore:
                     continue
                 
                 pos = id_to_pos[chunk_id]
-                
-                # Get context window
                 start_pos = max(0, pos - context_window)
                 end_pos = min(len(doc_chunks), pos + context_window + 1)
                 
                 context_chunks = [doc_chunks[i][0] for i in range(start_pos, end_pos)]
-                
-                # Merge texts
                 merged_text = "\n\n---\n\n".join(c.get("text", "") for c in context_chunks)
                 
-                # Create result entry
                 result = {
                     "text": merged_text,
                     "score": score,
@@ -302,13 +278,11 @@ class VectorStore:
                 
                 enriched_results.append(result)
         
-        # Sort by score
         enriched_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        
         return enriched_results[:k]
     
     def get_document_chunks(self, doc_hash: str) -> List[Dict[str, Any]]:
-        """Get all chunks for a document, sorted by chunk_id."""
+        """Get all chunks for a document."""
         indices = self._doc_chunks_cache.get(doc_hash, [])
         chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
         chunks.sort(key=lambda x: x.get("chunk_id", 0))
@@ -347,40 +321,39 @@ class VectorStore:
         return {
             "total_chunks": len(self.chunks),
             "total_documents": len(self._doc_chunks_cache),
-            "total_vectors": self.index.ntotal if self.index else 0,
+            "total_vectors": len(self.vectors) if self.vectors is not None else 0,
             "dimension": self.dimension
         }
     
     def clear(self) -> None:
         """Clear entire index."""
-        self.index = None
+        self.vectors = None
         self.chunks = []
         self._chunk_hashes = set()
         self._doc_chunks_cache = {}
         
-        if FAISS_INDEX_PATH.exists():
-            FAISS_INDEX_PATH.unlink()
+        if VECTORS_PATH.exists():
+            VECTORS_PATH.unlink()
         if METADATA_PATH.exists():
             METADATA_PATH.unlink()
     
     def delete_document(self, doc_hash: str) -> int:
-        """Delete all chunks for a document (requires rebuild)."""
+        """Delete all chunks for a document."""
         if doc_hash not in self._doc_chunks_cache:
             return 0
         
-        # Count chunks to delete
         count = len(self._doc_chunks_cache[doc_hash])
         
-        # Filter out document chunks
-        self.chunks = [c for c in self.chunks if c.get("doc_hash") != doc_hash]
+        # Get indices to keep
+        indices_to_delete = set(self._doc_chunks_cache[doc_hash])
+        indices_to_keep = [i for i in range(len(self.chunks)) if i not in indices_to_delete]
         
-        # Rebuild index from remaining chunks
-        # This is expensive but necessary for FAISS
-        if self.chunks:
-            # Would need to re-embed or store embeddings
-            # For now, just rebuild cache
+        if indices_to_keep and self.vectors is not None:
+            self.vectors = self.vectors[indices_to_keep]
+            self.chunks = [self.chunks[i] for i in indices_to_keep]
             self._rebuild_doc_cache()
             self._chunk_hashes = set(c.get("hash", "") for c in self.chunks if c.get("hash"))
+            self._save()
         else:
             self.clear()
         
@@ -400,10 +373,10 @@ def get_vector_store() -> VectorStore:
 
 
 def get_index_dimensions() -> Optional[int]:
-    """Get dimensions of the current FAISS index, if loaded."""
+    """Get dimensions of the current index, if loaded."""
     store = get_vector_store()
-    if store.index is not None:
-        return store.index.d
+    if store.vectors is not None and len(store.vectors) > 0:
+        return store.vectors.shape[1]
     return None
 
 
