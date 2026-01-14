@@ -192,42 +192,54 @@ def _extract_excel(
                 "error": metadata["error"]
             }
         
-        # Extract text using pure Python
-        text = extract_excel_pure(file_content, filename)
+        # Extract structured data using pure Python
+        sheets_data = extract_excel_pure(file_content, filename)
         
-        if text.startswith("Error:"):
+        if not sheets_data:
             return {
-                "text": text,
+                "text": "No data found in Excel file.",
                 "tables": [],
                 "dataframes": [],
                 "statistics": None,
                 "type": "excel",
                 "filename": filename,
                 "is_dataset": False,
-                "metadata": metadata,
-                "error": text
+                "metadata": metadata
             }
         
-        # Build basic table info from metadata
+        # Build tables list for the chunker
         tables = []
-        for sheet in metadata.get("sheets", []):
-            tables.append({
-                "sheet_name": sheet["name"],
-                "num_rows": sheet["rows"],
-                "extraction_method": "pure_python"
-            })
+        full_text_parts = []
+        total_rows = 0
+        
+        for i, sheet in enumerate(sheets_data):
+            table_info = {
+                "sheet_name": sheet["sheet_name"],
+                "table_index": i,
+                "headers": sheet["headers"],
+                "num_rows": sheet["num_rows"],
+                "num_cols": sheet["num_cols"],
+                "markdown": sheet["markdown"],
+                "source": sheet["sheet_name"]
+            }
+            tables.append(table_info)
+            full_text_parts.append(sheet["markdown"])
+            total_rows += sheet["num_rows"]
+        
+        full_text = "\n\n---\n\n".join(full_text_parts)
         
         return {
-            "text": text,
+            "text": full_text,
             "tables": tables,
             "dataframes": [],  # No pandas DataFrames to avoid segfaults
             "statistics": None,  # Statistics require pandas, skip for safety
             "type": "excel",
             "filename": filename,
-            "num_sheets": len(metadata.get("sheets", [])),
+            "num_sheets": len(sheets_data),
+            "total_table_rows": total_rows,
             "is_dataset": True,
             "metadata": metadata,
-            "total_chars": len(text)
+            "total_chars": len(full_text)
         }
         
     except Exception as e:
@@ -239,6 +251,7 @@ def _extract_excel(
             "error": str(e),
             "is_dataset": False
         }
+
 
 
 def _extract_csv(

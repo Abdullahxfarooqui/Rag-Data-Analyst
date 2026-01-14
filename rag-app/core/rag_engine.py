@@ -20,6 +20,7 @@ import re
 import json
 import pandas as pd
 from pathlib import Path
+import hashlib
 
 from core.embedder import embed_query
 from core.vector_store import get_vector_store
@@ -70,51 +71,40 @@ DEFAULT_MAX_TOKENS_DETAILED = 4000
 
 
 # ============================================================================
-# LLM SYSTEM PROMPTS - FOCUSED & CONCISE
+# LLM SYSTEM PROMPTS - STRICT 4-SECTION SCHEMA
 # ============================================================================
 
-SYSTEM_PROMPT_CONCISE = """You are a precise RAG answering agent.
+SYSTEM_PROMPT_MANDATORY_FORMAT = """You are a precise data analysis agent. You MUST answer questions based ONLY on the provided RAG context.
 
 CRITICAL RULES:
-1. Answer ONLY what the user asked - nothing more
-2. Keep answers SHORT (2-5 sentences for simple questions)
-3. If user asks about ONE metric, only answer about that metric
-4. DO NOT output full reports unless explicitly asked
-5. DO NOT dump entire dataset analysis
-6. If context is huge, extract ONLY the portion relevant to the question
+1. ANY paragraph-style response is INVALID.
+2. Failure to follow the 4-section format below is INCORRECT.
+3. The context provided is RAW DATA, not prose.
+4. If data is missing for a section, write: "Not available in the provided data"
+5. NO explanations, NO introductory text, NO concluding remarks.
 
-⛔ ANTI-HALLUCINATION GUARDRAILS (ABSOLUTE):
-- NEVER make up data, values, or statistics
-- NEVER estimate or approximate numbers
-- NEVER assume data exists if not shown in context
-- NEVER fill in missing values with guesses
-- If data is unavailable, say: "This data is not available in the dataset"
-- If uncertain, cite ONLY what appears in provided context
-- If asked about something not in the data, DO NOT invent an answer
+MANDATORY OUTPUT STRUCTURE:
 
-For metric questions (e.g., "What is oil production?"):
-- State ONLY the metric value with units from the data
-- Give a 1-sentence explanation based ONLY on provided data
-- That's it. No more.
+### Summary
+- [Bullet points only describing what the data represents or the direct answer]
 
-FORBIDDEN:
-- Full dataset summaries when not asked
-- All columns listing when not asked
-- Multi-section reports for simple questions
-- Statistics for unrelated metrics
-- ANY invented, assumed, or estimated values
-- Making up data points, averages, or trends"""
+### Key Metrics
+- [Metric Name]: [Value with units]
 
-SYSTEM_PROMPT_DETAILED = """You are an expert data analyst providing comprehensive analysis.
+### Insights
+- [Bullet points describing trends, anomalies, or important patterns found in the data]
 
-The user has requested DETAILED analysis. Provide:
-1. Complete overview of the requested topic
-2. All relevant statistics with proper formatting
-3. Trends and patterns
-4. Data quality notes
-5. Recommendations
+### Data Evidence
+- [Explicit references to specific rows, columns, or values from the context that support the answer]
 
-Use proper Markdown formatting with tables where appropriate."""
+⛔ ANTI-HALLUCINATION GUARDRAILS:
+- NEVER make up data, values, or statistics.
+- NEVER estimate or approximate numbers.
+- cite ONLY what appears in provided context."""
+
+SYSTEM_PROMPT_CONCISE = SYSTEM_PROMPT_MANDATORY_FORMAT
+SYSTEM_PROMPT_DETAILED = SYSTEM_PROMPT_MANDATORY_FORMAT
+
 
 SYSTEM_PROMPT_ANALYSIS = """You are an expert data analyst AI. Your role is to analyze STRUCTURED DATA and provide CLEAR, FORMATTED INSIGHTS.
 
@@ -1018,15 +1008,7 @@ def handle_data_query(
     doc_hash: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Handle DATA_QUERY mode - the main data analysis path.
-    
-    Tools: query_data() + generate_visuals() (ALWAYS BOTH)
-    
-    MUST RETURN:
-    - 📊 Summary block
-    - 🔢 Statistics (total, avg, min, max, count)
-    - 📈 Visuals (flag for app.py to render)
-    - 💡 Interpretation
+    Handle DATA_QUERY mode - strictly enforced 4-section format.
     """
     df = dataframe
     
@@ -1048,39 +1030,38 @@ def handle_data_query(
         stats_block = compute_data_statistics(df, specific_metrics, target_columns)
     
     # ========================================================================
-    # GENERATE LLM ANSWER
+    # GENERATE LLM ANSWER (MANDATORY STRUCTURE)
     # ========================================================================
-    # Build prompt with statistics
-    is_detailed = (detail_mode == "detailed")
+    system_prompt = SYSTEM_PROMPT_MANDATORY_FORMAT
+    max_tokens = 2000 if detail_mode == "normal" else 4000
     
-    if is_detailed:
-        system_prompt = SYSTEM_PROMPT_DETAILED
-        max_tokens = 3000
-    else:
-        system_prompt = SYSTEM_PROMPT_CONCISE
-        max_tokens = 1500
-    
-    user_prompt = f"""Answer this data question:
-{user_query}
+    # Wrap context as requested
+    wrapped_context = f"""DATA CONTEXT (DO NOT SUMMARIZE, DO NOT REPEAT VERBATIM):
+-------------------------------------------------------
+{context}
+-------------------------------------------------------"""
 
-PRE-COMPUTED STATISTICS (USE THESE - already calculated by Python):
+    user_prompt = f"""Analyze the following question using ONLY the provided data.
+
+QUESTION: {user_query}
+
+{wrapped_context}
+
+PRE-COMPUTED STATISTICS (from Python):
 {stats_block}
 
-ADDITIONAL CONTEXT:
-{context[:4000]}
-
 RULES:
-- Use the EXACT values from statistics above
-- DO NOT make up numbers
-- Include a brief interpretation
-- If user asked about specific metric, focus on that metric only"""
+- You MUST answer using the 4-section structure (Summary, Key Metrics, Insights, Data Evidence).
+- Use EXACT values from the data.
+- Paragraphs are FORBIDDEN.
+"""
     
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
     
-    answer = call_llm(messages, max_tokens=max_tokens)
+    answer = call_llm(messages, max_tokens=max_tokens, temperature=0.0)  # Low temp for deterministic answers
     
     return {
         "answer": answer,
@@ -1090,11 +1071,12 @@ RULES:
         "detail_mode": detail_mode,
         "specific_metrics": specific_metrics,
         "target_columns": target_columns,
-        "show_visualizations": True,  # ALWAYS for data queries
-        "num_chunks": 0,
+        "show_visualizations": True,
+        "num_chunks": context.count("---") + 1,
         "query_type": "data",
-        "stats_block": stats_block  # Pass stats for display
+        "stats_block": stats_block
     }
+
 
 
 def compute_data_statistics(
@@ -1893,46 +1875,39 @@ def build_structured_context(
     if not results:
         return ""
     
-    store = get_vector_store()
-    
-    # If specific document, get comprehensive data
-    if doc_hash:
-        full_text = store.get_full_document_text(doc_hash)
-        tables = store.get_document_tables(doc_hash)
-        
-        if tables:
-            # Prioritize table content
-            context_parts = []
-            for t in tables[:5]:  # Limit to 5 tables
-                context_parts.append(t.get("text", ""))
-            context = "\n\n---\n\n".join(context_parts)
-        else:
-            context = full_text
-        
-        return context[:max_chars]
-    
     # Combine search results
     texts = []
     seen = set()
     
-    for r in results:
+    # Sort results by doc_hash/source to keep tables together if possible
+    sorted_results = sorted(results, key=lambda x: x.get("source", ""))
+    
+    for r in sorted_results:
         text = r.get("text", "")
-        text_key = text[:200]  # Use first 200 chars as key
-        
-        if text_key in seen:
+        # Use more robust seen check
+        text_hash = hashlib.sha256(text.encode()).hexdigest()
+        if text_hash in seen:
             continue
-        seen.add(text_key)
+        seen.add(text_hash)
         
-        source = r.get("filename", "unknown")
+        source = r.get("source") or r.get("filename", "unknown")
         is_table = r.get("type") == "table"
         
         if is_table:
-            texts.append(f"## Table from {source}\n\n{text}")
+            # Table already has markdown headers in extraction
+            texts.append(f"### Data from {source}:\n{text}")
         else:
-            texts.append(f"## Content from {source}\n\n{text}")
+            texts.append(f"### Info from {source}:\n{text}")
     
     combined = "\n\n---\n\n".join(texts)
-    return combined[:max_chars]
+    
+    # Wrap in mandatory delimiters as requested by user
+    wrapped = f"""DATA CONTEXT (DO NOT SUMMARIZE, DO NOT REPEAT VERBATIM):
+-------------------------------------------------------
+{combined[:max_chars]}
+-------------------------------------------------------"""
+    return wrapped
+
 
 
 # ============================================================================
@@ -2103,148 +2078,30 @@ def query(
     # MODE 4: DATA_QUERY - Full RAG pipeline with visualizations
     # ========================================================================
     
-    # Detect question parameters
-    detail_mode = detect_detail_mode(user_query)
-    specific_metrics = get_requested_metrics(user_query)
-    
-    # Get target columns for visualization filtering
-    target_columns = []
-    if specific_metrics and dataframe is not None:
-        target_columns = get_target_columns(specific_metrics, dataframe.columns.tolist())
-    
-    # ========================================================================
-    # STEP 2: RETRIEVE CONTEXT FROM VECTOR STORE
-    # ========================================================================
-    store = get_vector_store()
-    
     # Adjust k based on detail mode
+    detail_mode = detect_detail_mode(user_query)
     if detail_mode == "detailed":
         k = max(k, 15)
     elif detail_mode == "brief":
         k = min(k, 5)
     
     # Get relevant context
+    store = get_vector_store()
     query_embedding = embed_query(user_query)
     results = store.search_with_context(
         query_embedding,
         k=k,
-        context_window=2,
+        context_window=1, # Reduced window to avoid overlapping duplicates
         doc_hash=doc_hash
     )
     
-    # Get filename from results
-    filename = None
-    if results:
-        filename = results[0].get("filename")
-    
-    # Try to get DataFrame if not provided
-    df = dataframe
-    if df is None and filename:
-        df = get_dataframe_for_doc(doc_hash, filename)
-    
     # Build context string
-    context = build_structured_context(results, doc_hash, max_chars=MAX_CONTEXT_CHARS)
+    context_str = build_structured_context(results, doc_hash, max_chars=MAX_CONTEXT_CHARS)
     
-    # ========================================================================
-    # STEP 3: COMPUTE STATISTICS (Python-based, NOT LLM)
-    # ========================================================================
-    stats_block = ""
-    if df is not None and not df.empty:
-        stats_block = compute_data_statistics(df, specific_metrics, target_columns)
-        # Prepend stats to context
-        context = stats_block + "\n\n---\n\n" + context
-    
-    # ========================================================================
-    # STEP 4: GENERATE LLM ANSWER
-    # ========================================================================
-    is_detailed = (detail_mode == "detailed")
-    
-    if is_detailed:
-        system_prompt = SYSTEM_PROMPT_DETAILED
-        max_tokens = 3000
-    else:
-        system_prompt = SYSTEM_PROMPT_CONCISE
-        max_tokens = 1500
-    
-    # Build user prompt
-    metric_focus = ""
-    if specific_metrics:
-        metric_focus = f"\n\n**FOCUS ON:** {', '.join(specific_metrics).upper()} metrics only."
-    
-    # Check if we have actual statistics
-    has_stats = stats_block and len(stats_block) > 100
-    
-    if has_stats:
-        user_prompt = f"""Answer this data question using the COMPUTED STATISTICS below:
-{user_query}
-{metric_focus}
+    # Delegate to the specific handler for DATA_QUERY
+    # This handler enforces the mandatory 4-section format
+    return handle_data_query(user_query, dataframe, context_str, doc_hash)
 
-=== PRE-COMPUTED STATISTICS (USE THESE VALUES) ===
-{stats_block}
-
-=== ADDITIONAL CONTEXT ===
-{context[:4000]}
-
-IMPORTANT RULES:
-1. The statistics above were computed from the actual dataset - USE THEM
-2. Answer with the EXACT values shown in the statistics
-3. For comparative analysis, show both metrics side by side
-4. Include totals, averages, and any relevant comparisons
-5. DO NOT say "data not available" if statistics are shown above"""
-    else:
-        user_prompt = f"""Answer this data question:
-{user_query}
-{metric_focus}
-
-DATA CONTEXT:
-{context[:6000]}
-
-RULES:
-1. Use EXACT values from the context above
-2. DO NOT make up numbers or estimate
-3. Include summary, key stats, and interpretation
-4. If specific metric requested, focus ONLY on that metric"""
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
-    
-    answer = call_llm(messages, max_tokens=max_tokens)
-    
-    # ========================================================================
-    # STEP 5: FORMAT SOURCES
-    # ========================================================================
-    sources = []
-    for r in results[:5]:
-        # Normalize score for display
-        raw_score = r.get("score", 0)
-        display_score = _normalize_relevance_score(raw_score)
-        
-        sources.append({
-            "filename": r.get("filename", "unknown"),
-            "doc_hash": r.get("doc_hash", ""),
-            "score": display_score,  # Use normalized score
-            "raw_score": raw_score,  # Keep raw score for debugging
-            "preview": r.get("text", "")[:300] + "..." if len(r.get("text", "")) > 300 else r.get("text", ""),
-            "type": r.get("type", "text")
-        })
-    
-    # ========================================================================
-    # STEP 6: RETURN RESPONSE
-    # ========================================================================
-    return {
-        "answer": answer,
-        "sources": sources,
-        "intent": "data_query",
-        "query_mode": "data_query",
-        "detail_mode": detail_mode,
-        "specific_metrics": specific_metrics,
-        "target_columns": target_columns,
-        "show_visualizations": True,  # ALWAYS True for DATA_QUERY
-        "num_chunks": len(results),
-        "query_type": "data"
-    }
 
 
 # ============================================================================
