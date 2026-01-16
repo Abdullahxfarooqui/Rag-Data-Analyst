@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Generator, Callable
 import pandas as pd
 
-from core.cache import (
+from core.ttl_cache import (
     TTLCache, 
     classification_cache, 
     search_cache, 
@@ -741,7 +741,7 @@ class RAGEngine:
     
     def get_engine_stats(self) -> Dict[str, Any]:
         """Get engine statistics."""
-        from core.cache import get_all_cache_stats
+        from core.ttl_cache import get_all_cache_stats
         from core.embedder import get_model_info
         
         return {

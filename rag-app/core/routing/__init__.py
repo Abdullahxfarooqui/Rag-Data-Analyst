@@ -15,8 +15,18 @@ from core.routing.handlers import (
     SystemTaskHandler,
     get_handler_for_mode,
 )
+from core.routing.smart_router import (
+    SmartQueryClassifier,
+    SmartRouter,
+    QueryCache,
+    QueryClassification,
+    RoutingResult,
+    QueryIntent,
+    ProcessingPath,
+)
 
 __all__ = [
+    # Original exports
     "QueryMode",
     "ClassificationResult",
     "QueryClassifier",
@@ -27,4 +37,12 @@ __all__ = [
     "FreeformHandler",
     "SystemTaskHandler",
     "get_handler_for_mode",
+    # New smart routing
+    "SmartQueryClassifier",
+    "SmartRouter",
+    "QueryCache",
+    "QueryClassification",
+    "RoutingResult",
+    "QueryIntent",
+    "ProcessingPath",
 ]

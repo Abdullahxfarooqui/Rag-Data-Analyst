@@ -4,10 +4,12 @@ Contains extraction, chunking, embedding, vector store, RAG engine, and data ana
 
 Key modules:
 - engine: New modular RAG engine orchestrator
-- llm: LLM client for NVIDIA Nemotron
+- llm: LLM client for NVIDIA Nemotron + Orchestrator
 - retrieval: Vector and keyword search
-- routing: Query classification and mode handlers
+- routing: Query classification, mode handlers, smart router
+- pipeline: Async pipeline for progressive loading
 - analytics: Statistics computation
+- analytics_service: Production analytics service (unified entry point)
 - cache: TTL caching layer
 - data_engine: Python-based table extraction, statistics, trend/anomaly detection
 - extractor: Unified document extraction
@@ -62,6 +64,50 @@ try:
 except ImportError:
     HAS_DATA_ENGINE = False
 
+# Import new production modules
+try:
+    from core.analytics_service import (
+        AnalyticsService,
+        AnalyticsResult,
+        PandasCompute,
+        ChartBuilder,
+    )
+    HAS_ANALYTICS_SERVICE = True
+except ImportError:
+    HAS_ANALYTICS_SERVICE = False
+
+try:
+    from core.llm.orchestrator import (
+        LLMOrchestrator,
+        StructuredInsight,
+        ToolRouter,
+    )
+    HAS_LLM_ORCHESTRATOR = True
+except ImportError:
+    HAS_LLM_ORCHESTRATOR = False
+
+try:
+    from core.routing.smart_router import (
+        SmartRouter,
+        SmartQueryClassifier,
+        QueryCache,
+        ProcessingPath,
+        QueryIntent,
+    )
+    HAS_SMART_ROUTER = True
+except ImportError:
+    HAS_SMART_ROUTER = False
+
+try:
+    from core.pipeline.async_pipeline import (
+        AsyncPipeline,
+        StreamlitPipeline,
+        ProgressiveResponse,
+    )
+    HAS_ASYNC_PIPELINE = True
+except ImportError:
+    HAS_ASYNC_PIPELINE = False
+
 __all__ = [
     # New Engine
     "RAGEngine",
@@ -103,5 +149,21 @@ __all__ = [
     "prepare_llm_chunks",
     "format_full_table",
     "format_sample_rows",
-    "format_statistics_summary"
+    "format_statistics_summary",
+    # Production modules (if available)
+    "AnalyticsService",
+    "AnalyticsResult",
+    "PandasCompute",
+    "ChartBuilder",
+    "LLMOrchestrator",
+    "StructuredInsight",
+    "ToolRouter",
+    "SmartRouter",
+    "SmartQueryClassifier",
+    "QueryCache",
+    "ProcessingPath",
+    "QueryIntent",
+    "AsyncPipeline",
+    "StreamlitPipeline",
+    "ProgressiveResponse",
 ]
