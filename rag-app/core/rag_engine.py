@@ -21,9 +21,28 @@ import json
 import pandas as pd
 from pathlib import Path
 import hashlib
+import logging
+from dataclasses import dataclass, field
 
 from core.embedder import embed_query
 from core.vector_store import get_vector_store
+
+# ============================================================================
+# STRUCTURED LOGGING CONFIGURATION
+# ============================================================================
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create console handler if not already present
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setLevel(logging.INFO)
+    _formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
 
 # Try to import data_engine functions
 try:
@@ -68,6 +87,244 @@ MAX_CONTEXT_CHARS = 6000
 MAX_CONTEXT_CHARS_DETAILED = 12000
 DEFAULT_MAX_TOKENS = 2000
 DEFAULT_MAX_TOKENS_DETAILED = 4000
+
+
+# ============================================================================
+# LLM RESPONSE DATACLASS & SAFE EXTRACTION UTILITY
+# ============================================================================
+
+@dataclass
+class LLMResponse:
+    """Structured response from LLM API calls."""
+    content: str
+    success: bool
+    model: Optional[str] = None
+    usage: Dict[str, int] = field(default_factory=dict)
+    finish_reason: Optional[str] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    raw_response: Optional[Dict] = None
+    
+    @property
+    def is_error(self) -> bool:
+        return not self.success
+    
+    @property
+    def total_tokens(self) -> int:
+        return self.usage.get("total_tokens", 0)
+
+
+def extract_llm_text(response: Union[Dict, Any], fallback_message: str = None) -> LLMResponse:
+    """
+    Safely extract text content from any LLM API response format.
+    
+    Handles:
+    - OpenAI ChatCompletion format: {"choices": [{"message": {"content": "..."}}]}
+    - OpenRouter format: Same as OpenAI
+    - Error responses: {"error": {"message": "...", "type": "..."}}
+    - Streaming partial responses
+    - Empty or malformed responses
+    
+    Args:
+        response: Raw API response (dict or response object)
+        fallback_message: Message to return if extraction fails
+        
+    Returns:
+        LLMResponse with extracted content or error details
+    """
+    default_fallback = (
+        "⚠️ **Automated insights could not be generated.**\n\n"
+        "However, the data analysis and visualizations completed successfully. "
+        "Please review the charts and statistics above for insights, "
+        "or try rephrasing your question."
+    )
+    fallback = fallback_message or default_fallback
+    
+    # Handle None response
+    if response is None:
+        logger.error("LLM response is None")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="null_response",
+            error_message="API returned null response"
+        )
+    
+    # If response is already a string, return it
+    if isinstance(response, str):
+        return LLMResponse(content=response, success=True)
+    
+    # Convert response object to dict if needed
+    if hasattr(response, 'json'):
+        try:
+            response = response.json()
+        except Exception as e:
+            logger.error(f"Failed to parse response as JSON: {e}")
+            return LLMResponse(
+                content=fallback,
+                success=False,
+                error_type="json_parse_error",
+                error_message=str(e)
+            )
+    
+    # Ensure we have a dict
+    if not isinstance(response, dict):
+        logger.error(f"Unexpected response type: {type(response)}")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="invalid_type",
+            error_message=f"Expected dict, got {type(response).__name__}"
+        )
+    
+    # ========================================================================
+    # CHECK FOR API ERROR RESPONSES FIRST
+    # ========================================================================
+    if "error" in response:
+        error_obj = response["error"]
+        if isinstance(error_obj, dict):
+            error_type = error_obj.get("type", "unknown_error")
+            error_message = error_obj.get("message", str(error_obj))
+        else:
+            error_type = "api_error"
+            error_message = str(error_obj)
+        
+        logger.error(f"LLM API error: [{error_type}] {error_message}")
+        
+        # Provide user-friendly message based on error type
+        user_message = fallback
+        if "rate_limit" in error_type.lower() or "rate" in error_message.lower():
+            user_message = (
+                "⚠️ **Rate limit reached.**\n\n"
+                "The AI service is temporarily unavailable due to high demand. "
+                "Please wait a moment and try again. "
+                "Your data analysis and visualizations are still available above."
+            )
+        elif "context_length" in error_type.lower() or "too long" in error_message.lower():
+            user_message = (
+                "⚠️ **Query too complex.**\n\n"
+                "The question requires more context than the model can process. "
+                "Try asking a more specific question about a smaller subset of data."
+            )
+        elif "authentication" in error_type.lower() or "api_key" in error_message.lower():
+            user_message = (
+                "⚠️ **Configuration error.**\n\n"
+                "The AI service is not properly configured. "
+                "Please contact the administrator."
+            )
+        
+        return LLMResponse(
+            content=user_message,
+            success=False,
+            error_type=error_type,
+            error_message=error_message,
+            raw_response=response
+        )
+    
+    # ========================================================================
+    # EXTRACT CONTENT FROM STANDARD CHATCOMPLETION FORMAT
+    # ========================================================================
+    choices = response.get("choices")
+    
+    # Validate choices exists and is a list
+    if choices is None:
+        logger.error(f"Response missing 'choices' key. Keys present: {list(response.keys())}")
+        logger.debug(f"Full response: {json.dumps(response, indent=2)[:500]}")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="missing_choices",
+            error_message="Response missing 'choices' key",
+            raw_response=response
+        )
+    
+    if not isinstance(choices, list):
+        logger.error(f"'choices' is not a list: {type(choices)}")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="invalid_choices_type",
+            error_message=f"'choices' is {type(choices).__name__}, expected list",
+            raw_response=response
+        )
+    
+    # Check for empty choices array
+    if len(choices) == 0:
+        logger.warning("'choices' array is empty")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="empty_choices",
+            error_message="'choices' array is empty",
+            raw_response=response
+        )
+    
+    # Extract first choice
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        logger.error(f"First choice is not a dict: {type(first_choice)}")
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="invalid_choice_type",
+            error_message=f"Choice is {type(first_choice).__name__}, expected dict",
+            raw_response=response
+        )
+    
+    # Extract message content (standard format)
+    message = first_choice.get("message", {})
+    content = message.get("content", "")
+    
+    # Try alternative formats if content is empty
+    if not content:
+        # Try delta format (streaming)
+        delta = first_choice.get("delta", {})
+        content = delta.get("content", "")
+    
+    if not content:
+        # Try text format (older completions API)
+        content = first_choice.get("text", "")
+    
+    # Final check for empty content
+    if not content or not content.strip():
+        logger.warning("Extracted content is empty")
+        finish_reason = first_choice.get("finish_reason", "unknown")
+        
+        # Check if it was cut off
+        if finish_reason == "length":
+            return LLMResponse(
+                content=(
+                    "⚠️ **Response was truncated.**\n\n"
+                    "The answer was too long and got cut off. "
+                    "Try asking a more specific question."
+                ),
+                success=False,
+                error_type="truncated",
+                error_message="Response truncated due to length",
+                finish_reason=finish_reason,
+                raw_response=response
+            )
+        
+        return LLMResponse(
+            content=fallback,
+            success=False,
+            error_type="empty_content",
+            error_message="Model returned empty content",
+            finish_reason=finish_reason,
+            raw_response=response
+        )
+    
+    # ========================================================================
+    # SUCCESS - Extract metadata
+    # ========================================================================
+    return LLMResponse(
+        content=content,
+        success=True,
+        model=response.get("model"),
+        usage=response.get("usage", {}),
+        finish_reason=first_choice.get("finish_reason"),
+        raw_response=response
+    )
 
 
 # ============================================================================
@@ -350,14 +607,47 @@ def call_llm(
     messages: List[Dict[str, str]],
     max_tokens: int = 2000,
     temperature: float = 0.1,
-    timeout: int = 60
+    timeout: int = 60,
+    fallback_message: str = None
 ) -> str:
-    """Call OpenRouter LLM API with error handling - optimized for speed."""
+    """
+    Call OpenRouter LLM API with production-grade error handling.
+    
+    Features:
+    - Safe response parsing via extract_llm_text()
+    - Structured logging for debugging
+    - User-friendly fallback messages
+    - Handles all error conditions gracefully
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        max_tokens: Maximum tokens in response
+        temperature: Sampling temperature (0.0 = deterministic)
+        timeout: Request timeout in seconds
+        fallback_message: Custom message if LLM fails
+        
+    Returns:
+        String content from LLM, or user-friendly error message
+    """
+    # Default fallback message
+    default_fallback = (
+        "⚠️ **Automated insights could not be generated.**\n\n"
+        "However, your data analysis and visualizations completed successfully. "
+        "Please review the statistics and charts above for insights, "
+        "or try rephrasing your question."
+    )
+    fallback = fallback_message or default_fallback
+    
     # Get API key fresh each time (in case it wasn't available at module load)
     api_key = get_api_key() or OPENROUTER_API_KEY
     
     if not api_key:
-        return "Error: No API key configured. Please set OPENROUTER_API_KEY in .streamlit/secrets.toml"
+        logger.error("No API key configured")
+        return (
+            "⚠️ **Configuration Error**\n\n"
+            "No API key configured. Please set OPENROUTER_API_KEY in .streamlit/secrets.toml\n\n"
+            "Your data analysis is still available in the visualizations above."
+        )
     
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -376,6 +666,10 @@ def call_llm(
         "temperature": temperature
     }
     
+    # Log the request (without sensitive data)
+    logger.info(f"LLM Request: model={LLM_MODEL}, max_tokens={token_limit}, temp={temperature}")
+    logger.debug(f"Message count: {len(messages)}, total chars: {sum(len(m.get('content', '')) for m in messages)}")
+    
     try:
         response = requests.post(
             OPENROUTER_BASE_URL,
@@ -383,15 +677,78 @@ def call_llm(
             json=payload,
             timeout=timeout
         )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        
+        # Log response status
+        logger.info(f"LLM Response: status={response.status_code}")
+        
+        # Parse JSON response
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response as JSON: {e}")
+            logger.error(f"Response text: {response.text[:500]}")
+            return fallback
+        
+        # Check HTTP status AFTER parsing JSON (to get error details)
+        if response.status_code != 200:
+            logger.error(f"LLM API returned status {response.status_code}")
+            # Use extract_llm_text to handle error response format
+            result = extract_llm_text(data, fallback)
+            return result.content
+        
+        # ====================================================================
+        # SAFE EXTRACTION using the utility function
+        # ====================================================================
+        result = extract_llm_text(data, fallback)
+        
+        if result.success:
+            # Log success metrics
+            logger.info(
+                f"LLM Success: tokens_used={result.total_tokens}, "
+                f"finish_reason={result.finish_reason}, "
+                f"content_length={len(result.content)}"
+            )
+            return result.content
+        else:
+            # Log the failure details
+            logger.warning(
+                f"LLM extraction failed: type={result.error_type}, "
+                f"message={result.error_message}"
+            )
+            return result.content  # Returns user-friendly fallback
+        
     except requests.exceptions.Timeout:
-        return "Error: Request timed out. The document may be too large. Try a more specific query."
+        logger.error(f"LLM request timed out after {timeout}s")
+        return (
+            "⚠️ **Request timed out.**\n\n"
+            "The AI service took too long to respond. This usually happens with "
+            "very complex queries or large datasets.\n\n"
+            "**Suggestions:**\n"
+            "- Try a more specific question\n"
+            "- Focus on a single metric (e.g., 'What is oil production?')\n"
+            "- Check the visualizations above for quick insights"
+        )
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"LLM connection error: {e}")
+        return (
+            "⚠️ **Connection Error**\n\n"
+            "Could not connect to the AI service. Please check your internet connection "
+            "and try again.\n\n"
+            "Your data analysis is still available in the visualizations above."
+        )
     except requests.exceptions.RequestException as e:
-        return f"Error communicating with LLM: {str(e)}"
+        logger.error(f"LLM request error: {e}")
+        error_detail = ""
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_data = e.response.json()
+                error_detail = f" - {error_data.get('error', {}).get('message', '')}"
+            except:
+                pass
+        return f"{fallback}\n\n*Technical details: {str(e)}{error_detail}*"
     except Exception as e:
-        return f"Error: {str(e)}"
+        logger.exception(f"Unexpected error in call_llm: {e}")
+        return fallback
 
 
 # ============================================================================

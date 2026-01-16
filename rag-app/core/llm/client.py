@@ -6,12 +6,20 @@ Features:
 - Streaming support
 - Configurable parameters
 - Error handling with retries
+- Safe response extraction
 """
 import os
 import json
 import requests
-from typing import Optional, List, Dict, Any, Generator, Callable
+import logging
+from typing import Optional, List, Dict, Any, Generator, Callable, Union
 from dataclasses import dataclass, field
+
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,6 +43,8 @@ class LLMResponse:
     usage: Dict[str, int] = field(default_factory=dict)
     finish_reason: Optional[str] = None
     error: Optional[str] = None
+    error_type: Optional[str] = None
+    raw_response: Optional[Dict] = None
     
     @property
     def is_error(self) -> bool:
@@ -43,6 +53,128 @@ class LLMResponse:
     @property
     def total_tokens(self) -> int:
         return self.usage.get("total_tokens", 0)
+    
+    @property
+    def success(self) -> bool:
+        return self.error is None
+
+
+def extract_llm_text(response: Union[Dict, Any], model: str = "unknown", fallback_message: str = None) -> LLMResponse:
+    """
+    Safely extract text content from any LLM API response format.
+    
+    Handles:
+    - OpenAI ChatCompletion format: {"choices": [{"message": {"content": "..."}}]}
+    - Error responses: {"error": {"message": "...", "type": "..."}}
+    - Empty or malformed responses
+    
+    Args:
+        response: Raw API response dict
+        model: Model name for response object
+        fallback_message: Message to return if extraction fails
+        
+    Returns:
+        LLMResponse with extracted content or error details
+    """
+    default_fallback = (
+        "Automated insights could not be generated, but data analysis "
+        "and visualizations completed successfully."
+    )
+    fallback = fallback_message or default_fallback
+    
+    # Handle None response
+    if response is None:
+        logger.error("LLM response is None")
+        return LLMResponse(
+            content="",
+            model=model,
+            error="API returned null response",
+            error_type="null_response"
+        )
+    
+    # Ensure we have a dict
+    if not isinstance(response, dict):
+        logger.error(f"Unexpected response type: {type(response)}")
+        return LLMResponse(
+            content="",
+            model=model,
+            error=f"Expected dict, got {type(response).__name__}",
+            error_type="invalid_type"
+        )
+    
+    # Check for API error responses
+    if "error" in response:
+        error_obj = response["error"]
+        if isinstance(error_obj, dict):
+            error_type = error_obj.get("type", "unknown_error")
+            error_message = error_obj.get("message", str(error_obj))
+        else:
+            error_type = "api_error"
+            error_message = str(error_obj)
+        
+        logger.error(f"LLM API error: [{error_type}] {error_message}")
+        return LLMResponse(
+            content="",
+            model=model,
+            error=error_message,
+            error_type=error_type,
+            raw_response=response
+        )
+    
+    # Extract from choices
+    choices = response.get("choices")
+    
+    if choices is None:
+        logger.error(f"Response missing 'choices' key. Keys: {list(response.keys())}")
+        return LLMResponse(
+            content="",
+            model=response.get("model", model),
+            error="Response missing 'choices' key",
+            error_type="missing_choices",
+            raw_response=response
+        )
+    
+    if not isinstance(choices, list) or len(choices) == 0:
+        logger.error(f"'choices' is empty or not a list")
+        return LLMResponse(
+            content="",
+            model=response.get("model", model),
+            error="'choices' is empty or invalid",
+            error_type="empty_choices",
+            raw_response=response
+        )
+    
+    # Extract content
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return LLMResponse(
+            content="",
+            model=response.get("model", model),
+            error="Invalid choice format",
+            error_type="invalid_choice",
+            raw_response=response
+        )
+    
+    # Try standard message format
+    message = first_choice.get("message", {})
+    content = message.get("content", "")
+    
+    # Try delta format (streaming)
+    if not content:
+        delta = first_choice.get("delta", {})
+        content = delta.get("content", "")
+    
+    # Try text format (older API)
+    if not content:
+        content = first_choice.get("text", "")
+    
+    return LLMResponse(
+        content=content or "",
+        model=response.get("model", model),
+        usage=response.get("usage", {}),
+        finish_reason=first_choice.get("finish_reason"),
+        raw_response=response
+    )
 
 
 class LLMClient:
@@ -134,33 +266,59 @@ class LLMClient:
             return LLMResponse(
                 content="",
                 model=self.config.model,
-                error="No API key configured. Please set OPENROUTER_API_KEY in Streamlit secrets."
+                error="No API key configured. Please set OPENROUTER_API_KEY in Streamlit secrets.",
+                error_type="no_api_key"
             )
         
         try:
+            logger.info(f"LLM Request: model={self.config.model}")
+            
             response = requests.post(
                 self.config.base_url,
                 headers=self._build_headers(),
                 json=self._build_payload(messages, max_tokens, temperature),
                 timeout=self.config.timeout
             )
-            response.raise_for_status()
             
-            data = response.json()
-            choice = data.get("choices", [{}])[0]
+            logger.info(f"LLM Response: status={response.status_code}")
             
-            return LLMResponse(
-                content=choice.get("message", {}).get("content", ""),
-                model=data.get("model", self.config.model),
-                usage=data.get("usage", {}),
-                finish_reason=choice.get("finish_reason")
-            )
+            # Parse JSON first to get error details
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse response as JSON: {e}")
+                return LLMResponse(
+                    content="",
+                    model=self.config.model,
+                    error=f"Failed to parse API response: {str(e)}",
+                    error_type="json_parse_error"
+                )
+            
+            # Use safe extraction utility
+            result = extract_llm_text(data, self.config.model)
+            
+            if result.success:
+                logger.info(f"LLM Success: tokens={result.total_tokens}")
+            else:
+                logger.warning(f"LLM extraction issue: {result.error_type} - {result.error}")
+            
+            return result
             
         except requests.exceptions.Timeout:
+            logger.error(f"LLM request timed out after {self.config.timeout}s")
             return LLMResponse(
                 content="",
                 model=self.config.model,
-                error="Request timed out. Try a more specific query."
+                error="Request timed out. Try a more specific query.",
+                error_type="timeout"
+            )
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"LLM connection error: {e}")
+            return LLMResponse(
+                content="",
+                model=self.config.model,
+                error="Connection error. Please check your internet connection.",
+                error_type="connection_error"
             )
         except requests.exceptions.RequestException as e:
             error_msg = str(e)
@@ -171,16 +329,20 @@ class LLMClient:
                     error_msg = f"{error_msg} - {error_detail}"
             except:
                 pass
+            logger.error(f"LLM request error: {error_msg}")
             return LLMResponse(
                 content="",
                 model=self.config.model,
-                error=f"Error communicating with LLM: {error_msg}"
+                error=f"Error communicating with LLM: {error_msg}",
+                error_type="request_error"
             )
         except Exception as e:
+            logger.exception(f"Unexpected error in LLM call: {e}")
             return LLMResponse(
                 content="",
                 model=self.config.model,
-                error=f"Unexpected error: {str(e)}"
+                error=f"Unexpected error: {str(e)}",
+                error_type="unexpected_error"
             )
     
     def stream(
